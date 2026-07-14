@@ -26,18 +26,49 @@ app.add_middleware(
 SUPABASE_URL = os.environ.get(
     "SUPABASE_URL", "https://flqwtnxyclvyepvvxpfs.supabase.co"
 )
-SUPABASE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY") or os.environ.get(
+SUPABASE_ANON_KEY = os.environ.get(
     "SUPABASE_KEY",
     "sb_publishable_3g8a4d68v1XWEs86b-zckg_00OAZmMt",
 )
+SUPABASE_SERVICE_ROLE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
 
 try:
-    supabase: Optional[Client] = (
-        create_client(SUPABASE_URL, SUPABASE_KEY) if SUPABASE_KEY else None
+    supabase_read: Optional[Client] = (
+        create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY or SUPABASE_ANON_KEY)
+        if (SUPABASE_SERVICE_ROLE_KEY or SUPABASE_ANON_KEY)
+        else None
     )
 except Exception as exc:
-    print(f"[CẢNH BÁO] Không thể kết nối tới Supabase: {exc}")
-    supabase = None
+    print(f"[CẢNH BÁO] Không thể khởi tạo Supabase client đọc: {exc}")
+    supabase_read = None
+
+try:
+    supabase_write: Optional[Client] = (
+        create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
+        if SUPABASE_SERVICE_ROLE_KEY
+        else None
+    )
+except Exception as exc:
+    print(f"[CẢNH BÁO] Không thể khởi tạo Supabase client ghi: {exc}")
+    supabase_write = None
+
+
+def require_write_client() -> Client:
+    if not supabase_write:
+        raise HTTPException(
+            status_code=503,
+            detail="SUPABASE_SERVICE_ROLE_KEY chưa được cấu hình cho backend.",
+        )
+    return supabase_write
+
+
+def require_read_client() -> Client:
+    if not supabase_read:
+        raise HTTPException(
+            status_code=503,
+            detail="Supabase read client chưa được cấu hình.",
+        )
+    return supabase_read
 
 
 class SchoolSchema(BaseModel):
@@ -90,13 +121,8 @@ async def serve_frontend():
 
 @app.get("/api/schools", response_model=List[Dict[str, Any]])
 async def get_schools():
-    if not supabase:
-        raise HTTPException(
-            status_code=503,
-            detail="Hệ thống cơ sở dữ liệu Supabase chưa được cấu hình.",
-        )
     try:
-        response = supabase.table("schools").select("*").order("created_at").execute()
+        response = require_read_client().table("schools").select("*").order("created_at").execute()
         return response.data
     except Exception as exc:
         raise HTTPException(
@@ -107,13 +133,10 @@ async def get_schools():
 
 @app.post("/api/schools", status_code=status.HTTP_201_CREATED)
 async def create_school(school: SchoolSchema):
-    if not supabase:
-        raise HTTPException(
-            status_code=503, detail="Cơ sở dữ liệu đám mây chưa kết nối."
-        )
     try:
         response = (
-            supabase.table("schools")
+            require_write_client()
+            .table("schools")
             .upsert(school.model_dump(), on_conflict="id")
             .execute()
         )
@@ -133,12 +156,8 @@ async def create_school(school: SchoolSchema):
 
 @app.delete("/api/schools/{school_id}")
 async def delete_school(school_id: str):
-    if not supabase:
-        raise HTTPException(
-            status_code=503, detail="Cơ sở dữ liệu đám mây chưa kết nối."
-        )
     try:
-        supabase.table("schools").delete().eq("id", school_id).execute()
+        require_write_client().table("schools").delete().eq("id", school_id).execute()
         return {"status": "success", "message": f"Đã xóa thành công điểm trường {school_id}"}
     except Exception as exc:
         raise HTTPException(
@@ -149,12 +168,8 @@ async def delete_school(school_id: str):
 
 @app.get("/api/products", response_model=List[Dict[str, Any]])
 async def get_products():
-    if not supabase:
-        raise HTTPException(
-            status_code=503, detail="Cơ sở dữ liệu đám mây chưa kết nối."
-        )
     try:
-        response = supabase.table("products").select("*").order("code").execute()
+        response = require_read_client().table("products").select("*").order("code").execute()
         return response.data
     except Exception as exc:
         raise HTTPException(
@@ -165,15 +180,11 @@ async def get_products():
 
 @app.post("/api/products", status_code=status.HTTP_201_CREATED)
 async def create_product(product: ProductSchema):
-    if not supabase:
-        raise HTTPException(
-            status_code=503, detail="Cơ sở dữ liệu đám mây chưa kết nối."
-        )
     try:
         data = product.model_dump()
         data["code"] = data["code"].strip().lower()
         response = (
-            supabase.table("products").upsert(data, on_conflict="code").execute()
+            require_write_client().table("products").upsert(data, on_conflict="code").execute()
         )
         return {"status": "success", "data": response.data[0]}
     except Exception as exc:
@@ -185,12 +196,8 @@ async def create_product(product: ProductSchema):
 
 @app.delete("/api/products/{code}")
 async def delete_product(code: str):
-    if not supabase:
-        raise HTTPException(
-            status_code=503, detail="Cơ sở dữ liệu đám mây chưa kết nối."
-        )
     try:
-        supabase.table("products").delete().eq("code", code.lower()).execute()
+        require_write_client().table("products").delete().eq("code", code.lower()).execute()
         return {
             "status": "success",
             "message": f"Đã xóa thực phẩm mã {code} khỏi hệ thống",
@@ -204,12 +211,8 @@ async def delete_product(code: str):
 
 @app.get("/api/stock")
 async def get_stock():
-    if not supabase:
-        raise HTTPException(
-            status_code=503, detail="Cơ sở dữ liệu đám mây chưa kết nối."
-        )
     try:
-        response = supabase.table("stock").select("*").execute()
+        response = require_read_client().table("stock").select("*").execute()
         return {item["product_code"]: item["qty"] for item in response.data}
     except Exception as exc:
         raise HTTPException(
@@ -220,15 +223,11 @@ async def get_stock():
 
 @app.post("/api/stock/upsert")
 async def upsert_stock(stock_item: StockSchema):
-    if not supabase:
-        raise HTTPException(
-            status_code=503, detail="Cơ sở dữ liệu đám mây chưa kết nối."
-        )
     try:
         data = stock_item.model_dump()
         data["product_code"] = data["product_code"].strip().lower()
         response = (
-            supabase.table("stock")
+            require_write_client().table("stock")
             .upsert(data, on_conflict="product_code")
             .execute()
         )
@@ -242,13 +241,9 @@ async def upsert_stock(stock_item: StockSchema):
 
 @app.get("/api/orders")
 async def get_daily_orders(date: str):
-    if not supabase:
-        raise HTTPException(
-            status_code=503, detail="Cơ sở dữ liệu đám mây chưa kết nối."
-        )
     try:
         response = (
-            supabase.table("daily_orders")
+            require_read_client().table("daily_orders")
             .select("*")
             .eq("delivery_date", date)
             .execute()
@@ -263,17 +258,13 @@ async def get_daily_orders(date: str):
 
 @app.post("/api/orders/upsert")
 async def upsert_daily_order(order_item: OrderUpsertSchema):
-    if not supabase:
-        raise HTTPException(
-            status_code=503, detail="Cơ sở dữ liệu đám mây chưa kết nối."
-        )
     try:
         data = order_item.model_dump()
         data["product_code"] = data["product_code"].strip().lower()
 
         if data["qty"] <= 0:
             (
-                supabase.table("daily_orders")
+                require_write_client().table("daily_orders")
                 .delete()
                 .eq("delivery_date", data["delivery_date"])
                 .eq("product_code", data["product_code"])
@@ -283,7 +274,7 @@ async def upsert_daily_order(order_item: OrderUpsertSchema):
             return {"status": "deleted", "message": "Đã xóa phân bổ do SL bằng 0."}
 
         response = (
-            supabase.table("daily_orders")
+            require_write_client().table("daily_orders")
             .upsert(
                 data,
                 on_conflict="delivery_date,product_code,school_id",
@@ -300,12 +291,8 @@ async def upsert_daily_order(order_item: OrderUpsertSchema):
 
 @app.delete("/api/orders")
 async def clear_daily_orders(date: str):
-    if not supabase:
-        raise HTTPException(
-            status_code=503, detail="Cơ sở dữ liệu đám mây chưa kết nối."
-        )
     try:
-        supabase.table("daily_orders").delete().eq("delivery_date", date).execute()
+        require_write_client().table("daily_orders").delete().eq("delivery_date", date).execute()
         return {"status": "success", "message": f"Đã xóa sạch dữ liệu ngày {date}"}
     except Exception as exc:
         raise HTTPException(
