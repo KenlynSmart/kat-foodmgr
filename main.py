@@ -1,4 +1,5 @@
 import os
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from fastapi import FastAPI, HTTPException, status
@@ -25,7 +26,10 @@ app.add_middleware(
 SUPABASE_URL = os.environ.get(
     "SUPABASE_URL", "https://flqwtnxyclvyepvvxpfs.supabase.co"
 )
-SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
+SUPABASE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY") or os.environ.get(
+    "SUPABASE_KEY",
+    "sb_publishable_3g8a4d68v1XWEs86b-zckg_00OAZmMt",
+)
 
 try:
     supabase: Optional[Client] = (
@@ -68,8 +72,8 @@ class OrderUpsertSchema(BaseModel):
 
 @app.get("/", response_class=HTMLResponse)
 async def serve_frontend():
-    file_path = "index.html"
-    if os.path.exists(file_path):
+    file_path = Path(__file__).with_name("index.html")
+    if file_path.exists():
         return FileResponse(file_path)
 
     return """
@@ -108,7 +112,11 @@ async def create_school(school: SchoolSchema):
             status_code=503, detail="Cơ sở dữ liệu đám mây chưa kết nối."
         )
     try:
-        response = supabase.table("schools").insert(school.model_dump()).execute()
+        response = (
+            supabase.table("schools")
+            .upsert(school.model_dump(), on_conflict="id")
+            .execute()
+        )
         if not response.data:
             raise HTTPException(
                 status_code=400, detail="Thao tác lưu điểm trường thất bại."
@@ -164,7 +172,9 @@ async def create_product(product: ProductSchema):
     try:
         data = product.model_dump()
         data["code"] = data["code"].strip().lower()
-        response = supabase.table("products").insert(data).execute()
+        response = (
+            supabase.table("products").upsert(data, on_conflict="code").execute()
+        )
         return {"status": "success", "data": response.data[0]}
     except Exception as exc:
         raise HTTPException(
