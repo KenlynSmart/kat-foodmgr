@@ -1,0 +1,919 @@
+﻿<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>VN FOOD - Quản Lý Thực Phẩm Mầm Non</title>
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Google Fonts & FontAwesome -->
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <!-- Vue.js 3 -->
+  <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+  <style>
+    body { font-family: 'Inter', sans-serif; }
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: #f1f1f1; }
+    ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 3px; }
+  </style>
+</head>
+<body class="bg-slate-50 text-slate-800">
+  <div id="app" class="min-h-screen flex flex-col">
+    <!-- Header -->
+    <header class="bg-emerald-600 text-white shadow-md">
+      <div class="max-w-7xl mx-auto px-4 py-4 flex flex-col sm:flex-row justify-between items-center gap-4">
+        <div class="flex items-center gap-3">
+          <div class="p-2 bg-white text-emerald-600 rounded-xl shadow-inner">
+            <i class="fa-solid fa-apple-whole text-2xl"></i>
+          </div>
+          <div>
+            <h1 class="text-xl font-bold tracking-tight">VN FOOD - MẦM NON</h1>
+            <p class="text-xs text-emerald-100 font-medium">Hệ thống tổng hợp đơn hàng & Quản lý đi chợ tự động</p>
+          </div>
+        </div>
+        
+        <!-- Tabs -->
+        <nav class="flex space-x-1 bg-emerald-700/50 p-1.5 rounded-xl text-sm font-medium w-full sm:w-auto overflow-x-auto">
+          <button @click="currentTab = 'nhaplieu'" :class="['px-3 py-1.5 rounded-lg transition-all whitespace-nowrap', currentTab === 'nhaplieu' ? 'bg-white text-emerald-700 shadow-sm' : 'text-white hover:bg-emerald-600/50']">
+            <i class="fa-solid fa-pen-to-square mr-1"></i>Nhập Liệu Đơn
+          </button>
+          <button @click="currentTab = 'tonghop'" :class="['px-3 py-1.5 rounded-lg transition-all whitespace-nowrap', currentTab === 'tonghop' ? 'bg-white text-emerald-700 shadow-sm' : 'text-white hover:bg-emerald-600/50']">
+            <i class="fa-solid fa-clipboard-list mr-1"></i>Tổng Hợp Đi Chợ
+            <span v-if="orderRows.length" class="ml-1 px-1.5 py-0.5 text-[10px] bg-red-500 text-white rounded-full">{{ orderRows.length }}</span>
+          </button>
+          <button @click="currentTab = 'tonkho'" :class="['px-3 py-1.5 rounded-lg transition-all whitespace-nowrap', currentTab === 'tonkho' ? 'bg-white text-emerald-700 shadow-sm' : 'text-white hover:bg-emerald-600/50']">
+            <i class="fa-solid fa-warehouse mr-1"></i>Tồn Kho
+          </button>
+          <button @click="currentTab = 'danhmuc'" :class="['px-3 py-1.5 rounded-lg transition-all whitespace-nowrap', currentTab === 'danhmuc' ? 'bg-white text-emerald-700 shadow-sm' : 'text-white hover:bg-emerald-600/50']">
+            <i class="fa-solid fa-folder-tree mr-1"></i>Danh Mục
+          </button>
+          <button @click="currentTab = 'quanlyschools'" :class="['px-3 py-1.5 rounded-lg transition-all whitespace-nowrap', currentTab === 'quanlyschools' ? 'bg-white text-emerald-700 shadow-sm' : 'text-white hover:bg-emerald-600/50']">
+            <i class="fa-solid fa-school-flag mr-1"></i>Trường Học ({{ schools.length }})
+          </button>
+        </nav>
+      </div>
+    </header>
+
+    <!-- Main -->
+    <main class="flex-grow max-w-7xl w-full mx-auto px-4 py-6">
+      
+      <!-- TAB 1: NHẬP LIỆU -->
+      <div v-show="currentTab === 'nhaplieu'" class="space-y-6">
+        <div class="bg-white p-5 rounded-2xl shadow-sm border border-slate-100 flex flex-col md:flex-row md:items-center justify-between gap-4">
+          <div class="space-y-1">
+            <h2 class="text-lg font-semibold text-slate-900 flex items-center gap-2">
+              <i class="fa-solid fa-circle-info text-emerald-500"></i>Nhập Liệu Nhanh Đơn Hàng Hôm Nay
+            </h2>
+            <p class="text-sm text-slate-500">Nhập mã viết tắt. Hệ thống tự động chuyển đổi dữ liệu độc lập khi thay đổi ngày.</p>
+          </div>
+          <div class="flex items-center gap-2">
+            <span class="text-sm font-semibold text-slate-600">Ngày giao hàng:</span>
+            <input type="date" v-model="deliveryDate" class="bg-slate-100 border border-slate-200 rounded-xl px-4 py-2 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500">
+          </div>
+        </div>
+
+        <div class="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
+          <div class="p-4 bg-slate-50 border-b border-slate-100 flex justify-between items-center flex-wrap gap-2">
+            <div class="flex items-center gap-2">
+              <span class="text-sm font-bold text-slate-700 uppercase tracking-wider">Danh Sách Thực Phẩm</span>
+              <span class="text-xs bg-emerald-100 text-emerald-800 px-2.5 py-0.5 rounded-full font-bold">Ngày: {{ formatDate(deliveryDate) }}</span>
+            </div>
+            <div class="flex gap-2">
+              <button @click="addNewRow" class="bg-emerald-600 hover:bg-emerald-700 text-white px-3 py-1.5 rounded-xl text-xs font-semibold shadow-sm flex items-center gap-1.5">
+                <i class="fa-solid fa-plus"></i>Thêm Dòng (F2)
+              </button>
+              <button @click="clearCurrentDateData" class="bg-rose-50 hover:bg-rose-100 text-rose-700 px-3 py-1.5 rounded-xl text-xs font-semibold border border-rose-200 shadow-sm flex items-center gap-1.5">
+                <i class="fa-solid fa-trash-arrow-up"></i>Xoá Sạch Ngày
+              </button>
+              <button @click="openQuickAddModal" class="bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200 px-3 py-1.5 rounded-xl text-xs font-semibold shadow-sm flex items-center gap-1.5">
+                <i class="fa-solid fa-folder-plus"></i>Thêm Mới Hàng
+              </button>
+            </div>
+          </div>
+
+          <div class="overflow-x-auto">
+            <table class="w-full text-left border-collapse">
+              <thead>
+                <tr class="bg-slate-100/75 border-b border-slate-200 text-[11px] font-bold text-slate-600 uppercase tracking-wider">
+                  <th class="py-3 px-4 text-center w-12">STT</th>
+                  <th class="py-3 px-4 w-44">Phím tắt (Shortcut)</th>
+                  <th class="py-3 px-4 min-w-[180px]">Tên Sản Phẩm chuẩn</th>
+                  <th class="py-3 px-4 w-20 text-center">ĐVT</th>
+                  <th class="py-3 px-4 w-28 text-right">Đơn Giá</th>
+                  <!-- Dynamic Schools -->
+                  <th v-for="school in schools" :key="school.id" class="py-3 px-4 text-center w-28 border-l border-r border-slate-200/50" :class="school.bgColor">
+                    Số lượng<br><span class="font-extrabold text-[10px]" :class="school.textColor">{{ school.name.toUpperCase() }}</span>
+                  </th>
+                  <th class="py-3 px-4 text-center w-28 font-bold bg-emerald-50/50 text-emerald-800 border-l border-r border-emerald-100">Tổng Nhu Cầu</th>
+                  <th class="py-3 px-4 text-right w-36 font-semibold">Thành Tiền</th>
+                  <th class="py-3 px-4 text-center w-12"></th>
+                </tr>
+              </thead>
+              <tbody class="divide-y divide-slate-100">
+                <tr v-for="(row, index) in orderRows" :key="row.id" class="hover:bg-slate-50/80 transition-colors">
+                  <td class="py-2 px-4 text-center font-medium text-slate-400 text-sm">{{ index + 1 }}</td>
+                  <td class="py-2 px-4 relative">
+                    <input type="text" v-model="row.shortcut" @input="onShortcutInput(index)" @focus="row.showSuggestions = true" @blur="hideSuggestionsWithDelay(index)" placeholder="Mã tắt..." class="w-full bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-1.5 text-sm font-semibold focus:bg-white focus:outline-none focus:ring-2 focus:ring-emerald-500 uppercase">
+                    <!-- Dropdown -->
+                    <div v-if="row.showSuggestions && getFilteredProducts(row.shortcut).length" class="absolute z-30 left-4 right-4 mt-1 bg-white border border-slate-200 rounded-lg shadow-lg max-h-56 overflow-y-auto py-1">
+                      <button v-for="p in getFilteredProducts(row.shortcut)" :key="p.code" @mousedown="selectProduct(index, p)" class="w-full text-left px-3 py-1.5 text-xs hover:bg-slate-100 flex justify-between items-center">
+                        <div>
+                          <span class="font-bold text-emerald-600 uppercase">{{ p.code }}</span>
+                          <span class="mx-1 text-slate-300">|</span>
+                          <span class="text-slate-700 font-medium">{{ p.name }}</span>
+                        </div>
+                        <span class="text-[10px] text-slate-400">ĐVT: {{ p.unit }}</span>
+                      </button>
+                    </div>
+                  </td>
+                  <td class="py-2 px-4">
+                    <span v-if="row.productName" class="text-sm font-semibold text-slate-800">{{ row.productName }}</span>
+                    <span v-else class="text-sm text-amber-500 font-medium italic"><i class="fa-solid fa-triangle-exclamation mr-1"></i>Chưa khớp mã</span>
+                  </td>
+                  <td class="py-2 px-4 text-center text-sm font-medium text-slate-600">{{ row.unit || '-' }}</td>
+                  <td class="py-2 px-4 text-right text-sm font-semibold text-slate-700">{{ row.price ? formatCurrency(row.price) : '-' }}</td>
+                  
+                  <!-- Qtys -->
+                  <td v-for="school in schools" :key="school.id" class="py-2 px-4 border-l border-r border-slate-100/50 text-center" :class="school.bgColor + '/20'">
+                    <input type="number" step="any" min="0" v-model.number="row.schoolQtys[school.id]" @input="calculateRow(index)" class="w-full text-center bg-transparent border-b border-dashed focus:outline-none py-0.5 text-sm font-semibold" :class="[school.textColor, school.borderColor, school.focusBorderColor]">
+                  </td>
+                  
+                  <td class="py-2 px-4 text-center font-bold text-sm text-emerald-800 bg-emerald-50/30">{{ formatNumber(row.totalQty) }}</td>
+                  <td class="py-2 px-4 text-right font-bold text-sm text-slate-800">{{ formatCurrency(row.subTotal) }}</td>
+                  <td class="py-2 px-4 text-center">
+                    <button @click="removeRow(index)" class="text-rose-400 hover:text-rose-600 p-1"><i class="fa-regular fa-trash-can"></i></button>
+                  </td>
+                </tr>
+                <tr v-if="!orderRows.length">
+                  <td :colspan="6 + schools.length" class="py-12 text-center text-slate-400 italic text-sm">Chưa có dòng đơn hàng nào. Hãy bấm "Thêm Dòng Mới" để bắt đầu!</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <!-- Footer totals -->
+          <div class="bg-slate-50 p-6 border-t border-slate-100">
+            <span class="text-xs font-bold text-slate-500 uppercase tracking-wider block mb-4">Chi tiết thành tiền từng trường</span>
+            <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+              <div v-for="school in schools" :key="school.id" class="p-4 rounded-xl border flex justify-between items-center shadow-inner" :class="[school.bgColor + '/60', 'border-' + school.textColor.split('-')[1] + '-100']">
+                <div>
+                  <span class="text-xs font-bold uppercase block tracking-wider" :class="school.textColor">Sub - {{ school.name }}</span>
+                  <span class="text-lg font-bold text-slate-900">{{ formatCurrency(totalSchools[school.id] || 0) }}</span>
+                </div>
+                <i class="fa-solid text-2xl" :class="[school.icon || 'fa-school', school.textColor.replace('text-', 'text-').replace('-800', '-300')]"></i>
+              </div>
+
+              <div class="bg-emerald-600 text-white p-4 rounded-xl flex justify-between items-center shadow-md">
+                <div>
+                  <span class="text-xs font-bold text-emerald-100 uppercase block tracking-wider">TỔNG TIỀN ĐƠN</span>
+                  <span class="text-xl font-extrabold">{{ formatCurrency(totalMoney) }}</span>
+                </div>
+                <i class="fa-solid fa-wallet text-emerald-200 text-2xl"></i>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- TAB 2: TỔNG HỢP MUA HÀNG -->
+      <div v-show="currentTab === 'tonghop'" class="space-y-6">
+        <div class="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+          <div class="space-y-1">
+            <h2 class="text-lg font-bold text-slate-900">Danh Sách Thực Mua Sau Trừ Kho</h2>
+            <p class="text-sm text-slate-500">Tự động cộng gộp nhu cầu các trường và trừ lượng hàng đang tồn trong <span class="font-semibold text-amber-600">Kho</span>.</p>
+          </div>
+          <div class="flex gap-2">
+            <button @click="copyToClipboard" class="bg-emerald-50 hover:bg-emerald-100 text-emerald-700 px-4 py-2 rounded-xl text-xs font-bold border border-emerald-100 flex items-center gap-1.5">
+              <i class="fa-solid fa-copy"></i>Sao Chép Danh Sách
+            </button>
+            <button @click="exportToExcel" class="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5">
+              <i class="fa-solid fa-file-excel"></i>Tải Phiếu Excel
+            </button>
+          </div>
+        </div>
+
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          <div class="lg:col-span-2 bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
+            <div class="p-4 bg-slate-50 border-b border-slate-100 flex justify-between items-center">
+              <span class="text-sm font-bold text-slate-700 uppercase tracking-wider">Bảng Thống Kê Thu Mua</span>
+              <span class="text-xs bg-emerald-100 text-emerald-800 px-2.5 py-1 rounded-full font-semibold">Ngày giao: {{ formatDate(deliveryDate) }}</span>
+            </div>
+            
+            <div class="overflow-x-auto">
+              <table class="w-full text-left border-collapse">
+                <thead>
+                  <tr class="bg-slate-100/75 border-b border-slate-200 text-[11px] font-bold text-slate-600 uppercase tracking-wider">
+                    <th class="py-3 px-4 w-12 text-center">STT</th>
+                    <th class="py-3 px-4">Tên Sản Phẩm</th>
+                    <th class="py-3 px-4 text-center w-20">ĐVT</th>
+                    <th class="py-3 px-4 text-center w-28 bg-slate-100/50">Tổng Nhu Cầu</th>
+                    <th class="py-3 px-4 text-center w-28 bg-amber-50/50 text-amber-800">Kho</th>
+                    <th class="py-3 px-4 text-center w-28 bg-emerald-50 text-emerald-800 font-extrabold">CẦN THỰC MUA</th>
+                    <th class="py-3 px-4 text-right w-32">Đơn Giá</th>
+                    <th class="py-3 px-4 text-right w-36">Tổng Tiền</th>
+                  </tr>
+                </thead>
+                <tbody class="divide-y divide-slate-100">
+                  <tr v-for="(item, index) in summaryList" :key="item.code" :class="['hover:bg-slate-50/50', item.realBuy === 0 ? 'bg-slate-50/30 opacity-60' : '']">
+                    <td class="py-3 px-4 text-center text-sm font-semibold text-slate-400">{{ index + 1 }}</td>
+                    <td class="py-3 px-4">
+                      <div class="font-bold text-slate-800 text-sm">{{ item.name }}</div>
+                      <span class="text-[10px] text-slate-400 font-mono font-bold uppercase">{{ item.code }}</span>
+                    </td>
+                    <td class="py-3 px-4 text-center text-xs font-semibold text-slate-600">{{ item.unit }}</td>
+                    <td class="py-3 px-4 text-center text-sm font-semibold text-slate-700 bg-slate-50/30">{{ formatNumber(item.demandQty) }}</td>
+                    <td class="py-3 px-4 text-center text-sm font-semibold text-amber-700 bg-amber-50/20">{{ formatNumber(item.stockQty) }}</td>
+                    <td class="py-3 px-4 text-center text-sm font-bold bg-emerald-50/40 text-emerald-800">
+                      <span v-if="item.realBuy > 0" class="bg-emerald-100 text-emerald-900 px-2 py-1 rounded-lg">{{ formatNumber(item.realBuy) }}</span>
+                      <span v-else class="text-slate-400 italic font-medium">Đủ kho (0)</span>
+                    </td>
+                    <td class="py-3 px-4 text-right text-xs font-semibold text-slate-500">{{ formatCurrency(item.price) }}</td>
+                    <td class="py-3 px-4 text-right text-sm font-extrabold text-slate-800">{{ formatCurrency(item.subTotal) }}</td>
+                  </tr>
+                  <tr v-if="!summaryList.length">
+                    <td colspan="8" class="py-12 text-center text-slate-400 italic text-sm">Chưa có đơn nhập liệu để phân tích thu mua cho ngày này.</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <!-- Analysis sidebar -->
+          <div class="space-y-6">
+            <div class="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 space-y-4">
+              <h3 class="text-sm font-bold text-slate-800 uppercase tracking-wide border-b border-slate-100 pb-3">Phân Tích Số Liệu</h3>
+              <div class="space-y-3.5 text-sm">
+                <div class="flex justify-between">
+                  <span class="text-slate-500">Mặt hàng cần mua:</span>
+                  <span class="font-bold text-slate-800">{{ summaryList.length }} loại</span>
+                </div>
+                <div class="flex justify-between">
+                  <span class="text-slate-500">Tiết kiệm nhờ xuất kho:</span>
+                  <span class="font-bold text-emerald-600">-{{ formatCurrency(totalSavedMoney) }}</span>
+                </div>
+                <div class="pt-3 border-t border-slate-100 flex justify-between items-center">
+                  <span class="text-sm font-bold text-slate-900">Thành tiền đi chợ:</span>
+                  <span class="text-lg font-extrabold text-emerald-600">{{ formatCurrency(totalRealCost) }}</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- TAB 3: TỒN KHO -->
+      <div v-show="currentTab === 'tonkho'" class="space-y-6">
+        <div class="bg-white p-5 rounded-2xl shadow-sm border border-slate-100 flex flex-col md:flex-row md:items-center justify-between gap-4">
+          <div class="space-y-1">
+            <h2 class="text-lg font-bold text-slate-900">Quản Lý Tồn Kho Thực Tế</h2>
+            <p class="text-sm text-slate-500">Cập nhật lượng hàng tồn tại kho để hệ thống tự trừ khi tổng hợp.</p>
+          </div>
+          <div class="w-full md:w-80">
+            <div class="relative">
+              <input type="text" v-model="stockSearch" placeholder="Tìm kiếm tên sản phẩm..." class="w-full bg-slate-100 border border-slate-200 rounded-xl pl-9 pr-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500">
+              <i class="fa-solid fa-magnifying-glass absolute left-3.5 top-3 text-slate-400 text-xs"></i>
+            </div>
+          </div>
+        </div>
+
+        <div class="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
+          <div class="overflow-x-auto">
+            <table class="w-full text-left border-collapse">
+              <thead>
+                <tr class="bg-slate-100/75 border-b border-slate-200 text-[11px] font-bold text-slate-600 uppercase tracking-wider">
+                  <th class="py-3 px-4 w-16 text-center">STT</th>
+                  <th class="py-3 px-4 w-32">Mã tắt</th>
+                  <th class="py-3 px-4">Tên Sản Phẩm</th>
+                  <th class="py-3 px-4 text-center w-28">ĐVT</th>
+                  <th class="py-3 px-4 text-center w-64">Số lượng tồn</th>
+                  <th class="py-3 px-4 text-center w-36">Hành động</th>
+                </tr>
+              </thead>
+              <tbody class="divide-y divide-slate-100">
+                <tr v-for="(p, index) in filteredProductsForStock" :key="p.code" class="hover:bg-slate-50/50">
+                  <td class="py-3 px-4 text-center text-sm font-medium text-slate-400">{{ index + 1 }}</td>
+                  <td class="py-3 px-4"><span class="bg-slate-100 text-slate-700 px-2.5 py-1 rounded-lg text-xs font-bold uppercase">{{ p.code }}</span></td>
+                  <td class="py-3 px-4 text-sm font-bold text-slate-800">{{ p.name }}</td>
+                  <td class="py-3 px-4 text-center text-xs font-semibold text-slate-500">{{ p.unit }}</td>
+                  <td class="py-3 px-4 text-center">
+                    <div class="flex justify-center items-center gap-3">
+                      <button @click="adjustStock(p.code, -1)" class="w-8 h-8 rounded-full bg-slate-100 hover:bg-slate-200 text-slate-600 flex items-center justify-center font-bold text-sm">-</button>
+                      <input type="number" step="any" min="0" v-model.number="stock[p.code]" @input="saveAllToLocalStorage" class="w-24 text-center border border-slate-200 rounded-lg py-1 text-sm font-bold text-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-500">
+                      <button @click="adjustStock(p.code, 1)" class="w-8 h-8 rounded-full bg-slate-100 hover:bg-slate-200 text-slate-600 flex items-center justify-center font-bold text-sm">+</button>
+                    </div>
+                  </td>
+                  <td class="py-3 px-4 text-center">
+                    <button @click="resetStock(p.code)" class="text-rose-500 hover:text-rose-700 text-xs font-semibold hover:underline">Đặt về 0</button>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- TAB 4: DANH MỤC -->
+      <div v-show="currentTab === 'danhmuc'" class="space-y-6">
+        <div class="bg-white p-5 rounded-2xl shadow-sm border border-slate-100 flex flex-col md:flex-row md:items-center justify-between gap-4">
+          <div class="space-y-1">
+            <h2 class="text-lg font-bold text-slate-900">Danh Mục Thực Phẩm & Đơn Giá Chuẩn</h2>
+            <p class="text-sm text-slate-500">Quản lý toàn bộ danh mục báo giá gốc sản phẩm đầu vào.</p>
+          </div>
+          <div class="flex flex-col sm:flex-row gap-2 w-full md:w-auto">
+            <div class="relative w-full sm:w-64">
+              <input type="text" v-model="productSearch" placeholder="Tìm kiếm..." class="w-full bg-slate-100 border border-slate-200 rounded-xl pl-9 pr-4 py-2 text-sm focus:outline-none">
+              <i class="fa-solid fa-magnifying-glass absolute left-3.5 top-3 text-slate-400 text-xs"></i>
+            </div>
+            <button @click="openQuickAddModal" class="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-xl text-sm font-semibold flex items-center justify-center gap-1.5">
+              <i class="fa-solid fa-plus"></i>Thêm Mới
+            </button>
+          </div>
+        </div>
+
+        <div class="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
+          <div class="overflow-x-auto">
+            <table class="w-full text-left border-collapse">
+              <thead>
+                <tr class="bg-slate-100/75 border-b border-slate-200 text-[11px] font-bold text-slate-600 uppercase tracking-wider">
+                  <th class="py-3 px-4 w-16 text-center">STT</th>
+                  <th class="py-3 px-4 w-36">Mã viết tắt</th>
+                  <th class="py-3 px-4">Tên Sản Phẩm</th>
+                  <th class="py-3 px-4 text-center w-28">ĐVT</th>
+                  <th class="py-3 px-4 text-right w-36">Đơn Giá</th>
+                  <th class="py-3 px-4 text-center w-28">Hành động</th>
+                </tr>
+              </thead>
+              <tbody class="divide-y divide-slate-100">
+                <tr v-for="(p, index) in filteredProducts" :key="p.code" class="hover:bg-slate-50/50">
+                  <td class="py-3 px-4 text-center text-sm font-medium text-slate-400">{{ index + 1 }}</td>
+                  <td class="py-3 px-4"><span class="bg-emerald-50 text-emerald-800 px-2.5 py-1 rounded-lg text-xs font-bold uppercase">{{ p.code }}</span></td>
+                  <td class="py-3 px-4 text-sm font-bold text-slate-800">{{ p.name }}</td>
+                  <td class="py-3 px-4 text-center text-xs font-semibold text-slate-500">{{ p.unit }}</td>
+                  <td class="py-3 px-4 text-right text-sm font-bold text-slate-700">{{ formatCurrency(p.price) }}</td>
+                  <td class="py-3 px-4 text-center">
+                    <button @click="editProduct(p)" class="text-blue-500 hover:text-blue-700 text-xs font-semibold mr-3">Sửa</button>
+                    <button @click="deleteProduct(p.code)" class="text-rose-500 hover:text-rose-700 text-xs font-semibold">Xoá</button>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- TAB 5: QUẢN LÝ TRƯỜNG HỌC (SUB) -->
+      <div v-show="currentTab === 'quanlyschools'" class="space-y-6">
+        <div class="bg-white p-5 rounded-2xl shadow-sm border border-slate-100 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+          <div class="space-y-1">
+            <h2 class="text-lg font-bold text-slate-900">Quản Lý Điểm Trường (Sub)</h2>
+            <p class="text-sm text-slate-500">Thêm, sửa đổi hoặc xoá các cơ sở mầm non. Các cột nhập liệu sẽ tự động đồng bộ theo bảng này.</p>
+          </div>
+          <button @click="openSchoolModal" class="bg-emerald-600 hover:bg-emerald-700 text-white px-5 py-2.5 rounded-xl text-sm font-semibold flex items-center justify-center gap-1.5 self-start sm:self-center">
+            <i class="fa-solid fa-plus"></i>Thêm Trường Mới
+          </button>
+        </div>
+
+        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+          <div v-for="school in schools" :key="school.id" class="bg-white rounded-2xl border border-slate-100 shadow-sm p-6 flex flex-col justify-between hover:shadow-md relative overflow-hidden">
+            <div class="absolute top-0 left-0 right-0 h-1.5" :class="school.textColor.replace('text-', 'bg-')"></div>
+            <div class="space-y-4">
+              <div class="flex items-center gap-3">
+                <div class="p-3 rounded-xl" :class="school.bgColor">
+                  <i class="fa-solid text-xl" :class="[school.icon || 'fa-school', school.textColor]"></i>
+                </div>
+                <div>
+                  <h3 class="font-bold text-slate-800 text-base">{{ school.name }}</h3>
+                  <span class="text-xs text-slate-400 font-mono">ID: {{ school.id }}</span>
+                </div>
+              </div>
+            </div>
+            <div class="flex gap-2 border-t border-slate-100 pt-4 mt-6">
+              <button @click="editSchool(school)" class="flex-1 bg-slate-50 hover:bg-slate-100 text-slate-700 py-2 rounded-xl text-xs font-semibold border border-slate-200">Sửa Tên</button>
+              <button @click="deleteSchool(school.id)" class="flex-1 bg-rose-50 hover:bg-rose-100 text-rose-600 py-2 rounded-xl text-xs font-semibold border border-rose-100">Xoá</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+    </main>
+
+    <!-- FOOTER -->
+    <footer class="bg-slate-900 text-slate-400 text-xs text-center py-6 border-t border-slate-800 mt-12">
+      <p class="font-semibold text-slate-300">© 2026 Hệ thống Điều phối Cung ứng Thực phẩm VN Food Việt Nam</p>
+    </footer>
+
+    <!-- MODAL PRODUCT -->
+    <div v-if="showModal" class="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+      <div class="bg-white w-full max-w-md rounded-2xl shadow-xl overflow-hidden border border-slate-100">
+        <div class="bg-emerald-600 px-6 py-4 text-white flex justify-between items-center">
+          <h3 class="font-bold text-base"><i class="fa-solid fa-cart-flatbed-suitcases mr-1">5</i>{{ isEditing ? 'Cập Nhật Sản Phẩm' : 'Khai Báo Sản Phẩm Mới' }}</h3>
+          <button @click="closeModal"><i class="fa-solid fa-xmark text-lg"></i></button>
+        </div>
+        <form @submit.prevent="saveProduct" class="p-6 space-y-4">
+          <div class="space-y-1.5">
+            <label class="block text-xs font-bold text-slate-600 uppercase">Mã Viết Tắt (Shortcut)*</label>
+            <input type="text" v-model="modalProduct.code" :disabled="isEditing" placeholder="VD: tbc" required class="w-full border border-slate-200 rounded-xl px-3.5 py-2 text-sm font-semibold uppercase disabled:bg-slate-100 focus:outline-none">
+          </div>
+          <div class="space-y-1.5">
+            <label class="block text-xs font-bold text-slate-600 uppercase">Tên Chuẩn*</label>
+            <input type="text" v-model="modalProduct.name" placeholder="Tên sản phẩm..." required class="w-full border border-slate-200 rounded-xl px-3.5 py-2 text-sm focus:outline-none">
+          </div>
+          <div class="grid grid-cols-2 gap-4">
+            <div class="space-y-1.5">
+              <label class="block text-xs font-bold text-slate-600 uppercase">ĐVT*</label>
+              <input type="text" v-model="modalProduct.unit" required class="w-full border border-slate-200 rounded-xl px-3.5 py-2 text-sm focus:outline-none">
+            </div>
+            <div class="space-y-1.5">
+              <label class="block text-xs font-bold text-slate-600 uppercase">Đơn Giá*</label>
+              <input type="number" v-model.number="modalProduct.price" required class="w-full border border-slate-200 rounded-xl px-3.5 py-2 text-sm focus:outline-none">
+            </div>
+          </div>
+          <div class="pt-4 border-t border-slate-100 flex justify-end gap-2.5">
+            <button type="button" @click="closeModal" class="px-4 py-2 text-sm font-semibold text-slate-500 rounded-xl">Huỷ</button>
+            <button type="submit" class="bg-emerald-600 text-white px-5 py-2 rounded-xl text-sm font-semibold">Lưu</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- MODAL SCHOOL -->
+    <div v-if="showSchoolModal" class="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+      <div class="bg-white w-full max-w-md rounded-2xl shadow-xl overflow-hidden border border-slate-100">
+        <div class="bg-indigo-600 px-6 py-4 text-white flex justify-between items-center">
+          <h3 class="font-bold text-base">{{ isEditingSchool ? 'Sửa Tên Trường Học' : 'Thêm Trường Học Mới' }}</h3>
+          <button @click="closeSchoolModal"><i class="fa-solid fa-xmark text-lg"></i></button>
+        </div>
+        <form @submit.prevent="saveSchool" class="p-6 space-y-4">
+          <div class="space-y-1.5">
+            <label class="block text-xs font-bold text-slate-600 uppercase">Tên Điểm Trường (Sub)*</label>
+            <input type="text" v-model="modalSchool.name" required class="w-full border border-slate-200 rounded-xl px-3.5 py-2 text-sm focus:outline-none">
+          </div>
+          <div v-if="!isEditingSchool" class="space-y-1.5">
+            <label class="block text-xs font-bold text-slate-600 uppercase">Chọn Màu Đại Diện</label>
+            <div class="grid grid-cols-2 gap-3 pt-1">
+              <button type="button" v-for="theme in schoolThemes" :key="theme.id" @click="selectSchoolTheme(theme)" :class="['p-3 rounded-xl border-2 flex items-center gap-2 text-xs font-bold', modalSchool.bgColor === theme.bgColor ? 'border-indigo-600 ' + theme.bgColor + ' ' + theme.textColor : 'border-slate-100 bg-slate-50']">
+                <div class="w-4 h-4 rounded-full" :class="theme.textColor.replace('text-', 'bg-')"></div>
+                Màu {{ theme.name }}
+              </button>
+            </div>
+          </div>
+          <div class="pt-4 border-t border-slate-100 flex justify-end gap-2.5">
+            <button type="button" @click="closeSchoolModal" class="px-4 py-2 text-sm font-semibold text-slate-500">Huỷ</button>
+            <button type="submit" class="bg-indigo-600 text-white px-5 py-2 rounded-xl text-sm font-semibold">Lưu</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- CUSTOM CONFIRM MODAL -->
+    <div v-if="showConfirm" class="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+      <div class="bg-white w-full max-w-sm rounded-2xl shadow-xl p-6 text-center space-y-4">
+        <div class="w-12 h-12 bg-rose-50 text-rose-500 rounded-full flex items-center justify-center mx-auto text-xl">
+          <i class="fa-solid fa-triangle-exclamation"></i>
+        </div>
+        <div class="space-y-1">
+          <h3 class="font-bold text-slate-900 text-base">{{ confirmTitle }}</h3>
+          <p class="text-xs text-slate-500">{{ confirmMessage }}</p>
+        </div>
+        <div class="flex gap-2.5 pt-2">
+          <button @click="showConfirm = false" class="flex-1 py-2 bg-slate-50 text-slate-700 text-xs font-semibold rounded-xl border border-slate-200">Huỷ</button>
+          <button @click="executeConfirm" class="flex-1 py-2 bg-rose-600 text-white text-xs font-semibold rounded-xl">Xác nhận</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- TOAST -->
+    <div v-if="toastMessage" class="fixed bottom-6 right-6 bg-slate-900 text-white px-4 py-3 rounded-xl shadow-xl flex items-center gap-2.5 z-50 text-sm font-medium border border-slate-800">
+      <i class="fa-solid fa-circle-check text-emerald-400"></i>
+      <span>{{ toastMessage }}</span>
+    </div>
+
+  </div>
+
+  <script>
+    const { createApp, ref, computed, onMounted, watch } = Vue;
+
+    createApp({
+      setup() {
+        const toastMessage = ref('');
+        const triggerToast = (msg) => {
+          toastMessage.value = msg;
+          setTimeout(() => { toastMessage.value = ''; }, 3000);
+        };
+
+        const formatCurrency = (val) => {
+          if (val === undefined || val === null) return '0đ';
+          return new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(val);
+        };
+
+        const formatNumber = (val) => {
+          return new Intl.NumberFormat('vi-VN', { maximumFractionDigits: 3 }).format(val);
+        };
+
+        const formatDate = (dateStr) => {
+          if (!dateStr) return '';
+          const [year, month, day] = dateStr.split('-');
+          return `${day}/${month}/${year}`;
+        };
+
+        // --- POPUP CONFIRM ---
+        const showConfirm = ref(false);
+        const confirmTitle = ref('');
+        const confirmMessage = ref('');
+        let confirmCallback = null;
+
+        const triggerConfirm = (title, message, callback) => {
+          confirmTitle.value = title;
+          confirmMessage.value = message;
+          confirmCallback = callback;
+          showConfirm.value = true;
+        };
+
+        const executeConfirm = () => {
+          if (confirmCallback) confirmCallback();
+          showConfirm.value = false;
+        };
+
+        // --- APP STATE ---
+        const currentTab = ref('nhaplieu');
+        const deliveryDate = ref('2026-07-15');
+        const productSearch = ref('');
+        const stockSearch = ref('');
+
+        const schools = ref([
+          { id: 'tanAn', name: 'Tân An', bgColor: 'bg-sky-50', textColor: 'text-sky-800', borderColor: 'border-sky-200', focusBorderColor: 'focus:border-sky-500', icon: 'fa-school' },
+          { id: 'mitsuba', name: 'Mitsuba', bgColor: 'bg-indigo-50', textColor: 'text-indigo-800', borderColor: 'border-indigo-200', focusBorderColor: 'focus:border-indigo-500', icon: 'fa-graduation-cap' },
+          { id: 'lcTre', name: 'LC Trẻ', bgColor: 'bg-violet-50', textColor: 'text-violet-800', borderColor: 'border-violet-200', focusBorderColor: 'focus:border-violet-500', icon: 'fa-child' }
+        ]);
+
+        const schoolThemes = [
+          { id: 'sky', name: 'Xanh dương', bgColor: 'bg-sky-50', textColor: 'text-sky-800', borderColor: 'border-sky-200', focusBorderColor: 'focus:border-sky-500', icon: 'fa-school' },
+          { id: 'indigo', name: 'Xanh chàm', bgColor: 'bg-indigo-50', textColor: 'text-indigo-800', borderColor: 'border-indigo-200', focusBorderColor: 'focus:border-indigo-500', icon: 'fa-graduation-cap' },
+          { id: 'violet', name: 'Tím nhạt', bgColor: 'bg-violet-50', textColor: 'text-violet-800', borderColor: 'border-violet-200', focusBorderColor: 'focus:border-violet-500', icon: 'fa-child' },
+          { id: 'rose', name: 'Hồng sen', bgColor: 'bg-rose-50', textColor: 'text-rose-800', borderColor: 'border-rose-200', focusBorderColor: 'focus:border-rose-500', icon: 'fa-shapes' },
+          { id: 'amber', name: 'Cam vàng', bgColor: 'bg-amber-50', textColor: 'text-amber-800', borderColor: 'border-amber-200', focusBorderColor: 'focus:border-amber-500', icon: 'fa-cubes' }
+        ];
+
+        const products = ref([
+          { code: 'cl', name: 'Cốt lết heo VietGap', unit: 'Kg', price: 129000 },
+          { code: 'nm', name: 'Nạc mông heo VietGap', unit: 'Kg', price: 137500 },
+          { code: 'tn', name: 'Nạc vai heo VietGap', unit: 'Kg', price: 137500 },
+          { code: 'tv', name: 'Thịt vai heo VietGap', unit: 'Kg', price: 128000 },
+          { code: 'tm', name: 'Thịt mông heo VietGap', unit: 'Kg', price: 128000 },
+          { code: 'tbc', name: 'Thịt ba chỉ heo VietGap', unit: 'Kg', price: 160000 },
+          { code: 'sn', name: 'Sườn non heo VietGap', unit: 'Kg', price: 180000 },
+          { code: 'hl', name: 'Hành lá tươi', unit: 'Kg', price: 35000 },
+          { code: 'mph', name: 'Miến Phú Hương yến tiệc 210gr', unit: 'Gói', price: 39000 },
+          { code: 'crdl', name: 'Cà rốt Đà Lạt', unit: 'Kg', price: 29000 }
+        ]);
+
+        const stock = ref({ 'tv': 2.5, 'hl': 0.5, 'crdl': 1.0 });
+        const orderRows = ref([]);
+
+        // Default orders by date
+        const ordersByDate = ref({
+          '2026-07-15': [
+            { id: 1, shortcut: 'tv', productName: 'Thịt vai heo VietGap', unit: 'Kg', price: 128000, schoolQtys: { tanAn: 3.5, mitsuba: 7.0, lcTre: 4.3 }, totalQty: 14.8, subTotal: 1894400, showSuggestions: false },
+            { id: 2, shortcut: 'hl', productName: 'Hành lá tươi', unit: 'Kg', price: 35000, schoolQtys: { tanAn: 0.1, mitsuba: 0.2, lcTre: 0.5 }, totalQty: 0.8, subTotal: 28000, showSuggestions: false },
+            { id: 3, shortcut: 'crdl', productName: 'Cà rốt Đà Lạt', unit: 'Kg', price: 29000, schoolQtys: { tanAn: 0.8, mitsuba: 1.0, lcTre: 3.0 }, totalQty: 4.8, subTotal: 139200, showSuggestions: false }
+          ]
+        });
+
+        const addNewRow = () => {
+          const nextId = orderRows.value.length ? Math.max(...orderRows.value.map(r => r.id)) + 1 : 1;
+          const initialQtys = {};
+          schools.value.forEach(school => { initialQtys[school.id] = 0; });
+          orderRows.value.push({
+            id: nextId, shortcut: '', productName: '', unit: '', price: 0,
+            schoolQtys: initialQtys, totalQty: 0, subTotal: 0, showSuggestions: false
+          });
+          saveAllToLocalStorage();
+        };
+
+        const calculateRow = (index) => {
+          const row = orderRows.value[index];
+          if (!row) return;
+          let sum = 0;
+          schools.value.forEach(school => { sum += parseFloat(row.schoolQtys[school.id]) || 0; });
+          row.totalQty = parseFloat(sum.toFixed(3));
+          row.subTotal = Math.round(row.totalQty * (row.price || 0));
+          saveAllToLocalStorage();
+        };
+
+        const removeRow = (index) => {
+          orderRows.value.splice(index, 1);
+          saveAllToLocalStorage();
+        };
+
+        const onShortcutInput = (index) => {
+          const row = orderRows.value[index];
+          if (!row) return;
+          const query = row.shortcut.trim().toLowerCase();
+          const match = products.value.find(p => p.code.toLowerCase() === query);
+          if (match) {
+            row.productName = match.name;
+            row.unit = match.unit;
+            row.price = match.price;
+            calculateRow(index);
+          } else {
+            row.productName = ''; row.unit = ''; row.price = 0; row.totalQty = 0; row.subTotal = 0;
+          }
+          saveAllToLocalStorage();
+        };
+
+        const selectProduct = (index, prod) => {
+          const row = orderRows.value[index];
+          if (!row) return;
+          row.shortcut = prod.code;
+          row.productName = prod.name;
+          row.unit = prod.unit;
+          row.price = prod.price;
+          row.showSuggestions = false;
+          calculateRow(index);
+        };
+
+        const hideSuggestionsWithDelay = (index) => {
+          setTimeout(() => { if (orderRows.value[index]) orderRows.value[index].showSuggestions = false; }, 200);
+        };
+
+        const getFilteredProducts = (query) => {
+          if (!query) return [];
+          const q = query.trim().toLowerCase();
+          return products.value.filter(p => p.code.includes(q) || p.name.toLowerCase().includes(q)).slice(0, 5);
+        };
+
+        // --- STORAGE ---
+        const saveAllToLocalStorage = () => {
+          ordersByDate.value[deliveryDate.value] = JSON.parse(JSON.stringify(orderRows.value));
+          localStorage.setItem('vnfood_orders', JSON.stringify(ordersByDate.value));
+          localStorage.setItem('vnfood_products', JSON.stringify(products.value));
+          localStorage.setItem('vnfood_schools', JSON.stringify(schools.value));
+          localStorage.setItem('vnfood_stock', JSON.stringify(stock.value));
+        };
+
+        const loadAllFromLocalStorage = () => {
+          const storedOrders = localStorage.getItem('vnfood_orders');
+          const storedProducts = localStorage.getItem('vnfood_products');
+          const storedSchools = localStorage.getItem('vnfood_schools');
+          const storedStock = localStorage.getItem('vnfood_stock');
+
+          if (storedProducts) products.value = JSON.parse(storedProducts);
+          if (storedSchools) schools.value = JSON.parse(storedSchools);
+          if (storedStock) stock.value = JSON.parse(storedStock);
+          if (storedOrders) ordersByDate.value = JSON.parse(storedOrders);
+        };
+
+        loadAllFromLocalStorage();
+
+        watch(deliveryDate, (newDate, oldDate) => {
+          if (oldDate) ordersByDate.value[oldDate] = JSON.parse(JSON.stringify(orderRows.value));
+          if (ordersByDate.value[newDate]) {
+            orderRows.value = JSON.parse(JSON.stringify(ordersByDate.value[newDate]));
+            triggerToast(`Đã tải đơn hàng ngày ${formatDate(newDate)}`);
+          } else {
+            orderRows.value = [];
+            addNewRow();
+          }
+          saveAllToLocalStorage();
+        }, { immediate: true });
+
+        const clearCurrentDateData = () => {
+          triggerConfirm('Xoá sạch dữ liệu', `Xoá sạch dữ liệu ngày ${formatDate(deliveryDate.value)}?`, () => {
+            orderRows.value = [];
+            addNewRow();
+            saveAllToLocalStorage();
+            triggerToast('Đã dọn dẹp ngày.');
+          });
+        };
+
+        const adjustStock = (code, val) => {
+          if (!stock.value[code]) stock.value[code] = 0;
+          stock.value[code] = Math.max(0, parseFloat((stock.value[code] + val).toFixed(2)));
+          saveAllToLocalStorage();
+        };
+
+        const resetStock = (code) => {
+          stock.value[code] = 0;
+          saveAllToLocalStorage();
+          triggerToast('Đã đặt tồn kho về 0');
+        };
+
+        // --- COMPUTED FINANCES ---
+        const totalSchools = computed(() => {
+          const totals = {};
+          schools.value.forEach(s => { totals[s.id] = 0; });
+          orderRows.value.forEach(row => {
+            const price = row.price || 0;
+            schools.value.forEach(school => {
+              totals[school.id] += (parseFloat(row.schoolQtys[school.id]) || 0) * price;
+            });
+          });
+          Object.keys(totals).forEach(k => { totals[k] = Math.round(totals[k]); });
+          return totals;
+        });
+
+        const totalMoney = computed(() => {
+          return orderRows.value.reduce((sum, r) => sum + (r.subTotal || 0), 0);
+        });
+
+        const summaryList = computed(() => {
+          const map = {};
+          orderRows.value.forEach(row => {
+            if (!row.productName) return;
+            const matchProd = products.value.find(p => p.code.toLowerCase() === row.shortcut.toLowerCase());
+            if (!matchProd) return;
+            const code = matchProd.code;
+            if (!map[code]) {
+              map[code] = { code, name: matchProd.name, unit: matchProd.unit, price: matchProd.price, demandQty: 0 };
+            }
+            map[code].demandQty += (row.totalQty || 0);
+          });
+
+          return Object.values(map).map(item => {
+            const stockQty = stock.value[item.code] || 0;
+            const realBuy = Math.max(0, parseFloat((item.demandQty - stockQty).toFixed(3)));
+            return { ...item, stockQty, realBuy, subTotal: Math.round(realBuy * item.price) };
+          });
+        });
+
+        const totalSavedMoney = computed(() => {
+          return summaryList.value.reduce((sum, item) => {
+            return sum + Math.round(Math.min(item.demandQty, item.stockQty) * item.price);
+          }, 0);
+        });
+
+        const totalRealCost = computed(() => {
+          return summaryList.value.reduce((sum, item) => sum + item.subTotal, 0);
+        });
+
+        // --- MODALS PRODUCT & SCHOOLS ---
+        const showModal = ref(false);
+        const isEditing = ref(false);
+        const modalProduct = ref({ code: '', name: '', unit: '', price: 0 });
+
+        const openQuickAddModal = () => {
+          isEditing.value = false;
+          modalProduct.value = { code: '', name: '', unit: '', price: 0 };
+          showModal.value = true;
+        };
+
+        const editProduct = (p) => {
+          isEditing.value = true;
+          modalProduct.value = { ...p };
+          showModal.value = true;
+        };
+
+        const closeModal = () => { showModal.value = false; };
+
+        const saveProduct = () => {
+          const codeLower = modalProduct.value.code.trim().toLowerCase();
+          if (isEditing.value) {
+            const idx = products.value.findIndex(p => p.code.toLowerCase() === codeLower);
+            if (idx !== -1) products.value[idx] = { code: codeLower, name: modalProduct.value.name.trim(), unit: modalProduct.value.unit.trim(), price: modalProduct.value.price };
+          } else {
+            products.value.push({ code: codeLower, name: modalProduct.value.name.trim(), unit: modalProduct.value.unit.trim(), price: modalProduct.value.price });
+          }
+          saveAllToLocalStorage();
+          closeModal();
+        };
+
+        const deleteProduct = (code) => {
+          triggerConfirm('Xoá sản phẩm', `Bạn muốn xoá sản phẩm ${code.toUpperCase()}?`, () => {
+            products.value = products.value.filter(p => p.code !== code);
+            saveAllToLocalStorage();
+            triggerToast('Đã xoá.');
+          });
+        };
+
+        // --- SCHOOL DYNAMICS ---
+        const showSchoolModal = ref(false);
+        const isEditingSchool = ref(false);
+        const modalSchool = ref({ id: '', name: '', bgColor: 'bg-rose-50', textColor: 'text-rose-800', borderColor: 'border-rose-200', focusBorderColor: 'focus:border-rose-500', icon: 'fa-shapes' });
+
+        const openSchoolModal = () => {
+          isEditingSchool.value = false;
+          modalSchool.value = { id: '', name: '', bgColor: 'bg-rose-50', textColor: 'text-rose-800', borderColor: 'border-rose-200', focusBorderColor: 'focus:border-rose-500', icon: 'fa-shapes' };
+          showSchoolModal.value = true;
+        };
+
+        const selectSchoolTheme = (theme) => {
+          modalSchool.value.bgColor = theme.bgColor;
+          modalSchool.value.textColor = theme.textColor;
+          modalSchool.value.borderColor = theme.borderColor;
+          modalSchool.value.focusBorderColor = theme.focusBorderColor;
+          modalSchool.value.icon = theme.icon;
+        };
+
+        const editSchool = (school) => {
+          isEditingSchool.value = true;
+          modalSchool.value = { ...school };
+          showSchoolModal.value = true;
+        };
+
+        const closeSchoolModal = () => { showSchoolModal.value = false; };
+
+        const saveSchool = () => {
+          const name = modalSchool.value.name.trim();
+          if (!name) return;
+          if (isEditingSchool.value) {
+            const target = schools.value.find(s => s.id === modalSchool.value.id);
+            if (target) target.name = name;
+          } else {
+            const rawId = 'school_' + Date.now();
+            schools.value.push({ id: rawId, name, bgColor: modalSchool.value.bgColor, textColor: modalSchool.value.textColor, borderColor: modalSchool.value.borderColor, focusBorderColor: modalSchool.value.focusBorderColor, icon: modalSchool.value.icon });
+            orderRows.value.forEach(row => { row.schoolQtys[rawId] = 0; });
+          }
+          saveAllToLocalStorage();
+          closeSchoolModal();
+        };
+
+        const deleteSchool = (schoolId) => {
+          const target = schools.value.find(s => s.id === schoolId);
+          if (!target) return;
+          triggerConfirm('Xoá trường học', `Xoá cơ sở "${target.name}"?`, () => {
+            schools.value = schools.value.filter(s => s.id !== schoolId);
+            orderRows.value.forEach(row => {
+              if (row.schoolQtys && row.schoolQtys[schoolId] !== undefined) delete row.schoolQtys[schoolId];
+              let sum = 0;
+              Object.keys(row.schoolQtys).forEach(sid => { sum += parseFloat(row.schoolQtys[sid]) || 0; });
+              row.totalQty = parseFloat(sum.toFixed(3));
+              row.subTotal = Math.round(row.totalQty * (row.price || 0));
+            });
+            saveAllToLocalStorage();
+            triggerToast('Đã xoá cơ sở.');
+          });
+        };
+
+        const filteredProducts = computed(() => {
+          const q = productSearch.value.trim().toLowerCase();
+          return q ? products.value.filter(p => p.code.includes(q) || p.name.toLowerCase().includes(q)) : products.value;
+        });
+
+        const filteredProductsForStock = computed(() => {
+          const q = stockSearch.value.trim().toLowerCase();
+          return q ? products.value.filter(p => p.code.includes(q) || p.name.toLowerCase().includes(q)) : products.value;
+        });
+
+        onMounted(() => {
+          window.addEventListener('keydown', (e) => {
+            if (e.key === 'F2' && currentTab.value === 'nhaplieu') addNewRow();
+          });
+        });
+
+        // --- UTILS: COPY & EXPORT ---
+        const copyToClipboard = () => {
+          let text = `DANH SÁCH THỰC MUA ĐI CHỢ NGÀY ${formatDate(deliveryDate.value)}\n`;
+          text += `-----------------------------------------------\n`;
+          summaryList.value.forEach((item, index) => {
+            if (item.realBuy > 0) text += `${index + 1}. ${item.name} | Mua: ${item.realBuy} ${item.unit} | Giá: ${formatCurrency(item.price)}/đv\n`;
+          });
+          text += `-----------------------------------------------\n`;
+          text += `Tổng chi phí đi chợ thực tế sau trừ kho: ${formatCurrency(totalRealCost.value)}`;
+
+          const textArea = document.createElement("textarea");
+          textArea.value = text;
+          textArea.style.position = "fixed";
+          textArea.style.opacity = "0";
+          document.body.appendChild(textArea);
+          textArea.focus(); textArea.select();
+          try {
+            document.execCommand('copy') ? triggerToast('Đã sao chép danh sách đi chợ!') : triggerToast('Vui lòng copy thủ công!');
+          } catch (err) {
+            triggerToast('Lỗi bảo mật sao chép!');
+          }
+          document.body.removeChild(textArea);
+        };
+
+        const exportToExcel = () => {
+          let csv = "\uFEFFSTT,Mã viết tắt,Tên thực phẩm,Đơn vị tính,Tổng nhu cầu,Đã trừ tồn kho,Số lượng cần mua,Đơn giá,Thành tiền dự toán\n";
+          summaryList.value.forEach((item, index) => {
+            csv += `${index + 1},${item.code.toUpperCase()},"${item.name}",${item.unit},${item.demandQty},${item.stockQty},${item.realBuy},${item.price},${item.subTotal}\n`;
+          });
+          csv += `\n,,,,,,Tổng chi phí thực tế:,${totalRealCost.value}\n`;
+
+          const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+          const link = document.createElement("a");
+          link.href = URL.createObjectURL(blob);
+          link.setAttribute("download", `phieu_di_cho_${deliveryDate.value}.csv`);
+          document.body.appendChild(link);
+          link.click();
+          document.body.removeChild(link);
+        };
+
+        return {
+          currentTab, deliveryDate, productSearch, stockSearch, toastMessage,
+          schools, schoolThemes, products, stock, orderRows,
+          addNewRow, removeRow, onShortcutInput, selectProduct, hideSuggestionsWithDelay,
+          calculateRow, getFilteredProducts, totalSchools, totalMoney, summaryList,
+          totalSavedMoney, totalRealCost, adjustStock, resetStock,
+          showModal, isEditing, modalProduct, openQuickAddModal, editProduct, closeModal, saveProduct, deleteProduct,
+          showSchoolModal, isEditingSchool, modalSchool, openSchoolModal, selectSchoolTheme, editSchool, closeSchoolModal, saveSchool, deleteSchool,
+          showConfirm, confirmTitle, confirmMessage, executeConfirm, clearCurrentDateData,
+          filteredProducts, filteredProductsForStock, formatCurrency, formatNumber, formatDate, copyToClipboard, exportToExcel
+        };
+      }
+    }).mount('#app');
+  </script>
+</body>
+</html>
