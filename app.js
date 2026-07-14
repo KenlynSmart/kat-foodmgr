@@ -2,7 +2,12 @@ const { createApp, ref, computed, watch, onMounted, nextTick } = Vue;
 
 createApp({
   setup() {
-    const API_BASE = '';
+    const API_BASE =
+      window.__VN_FOOD_API_BASE__ ||
+      localStorage.getItem('vn-food-api-base') ||
+      (window.location.hostname.endsWith('github.io')
+        ? 'https://kat-foodmgr-backend.onrender.com'
+        : '');
     const STORAGE_KEY = 'vn-food-v2-state';
 
     const today = new Date().toISOString().slice(0, 10);
