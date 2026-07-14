@@ -2,8 +2,7 @@ const { createApp, ref, computed, watch, onMounted, nextTick } = Vue;
 
 createApp({
   setup() {
-    const SUPABASE_URL = 'https://flqwtnxyclvyepvvxpfs.supabase.co';
-    const SUPABASE_KEY = 'sb_publishable_3g8a4d68v1XWEs86b-zckg_00OAZmMt';
+    const API_BASE = '';
     const STORAGE_KEY = 'vn-food-v2-state';
 
     const today = new Date().toISOString().slice(0, 10);
@@ -75,6 +74,7 @@ createApp({
     const deliveryDate = ref(state.deliveryDate);
     const parserText = ref('');
     const parserPreview = ref([]);
+    const toasts = ref([]);
     const productFilter = ref('');
     const schoolFilter = ref('');
     const stockFilter = ref('');
@@ -93,8 +93,6 @@ createApp({
     let syncing = false;
     let syncTimer = null;
     let pollingTimer = null;
-    let realtimeChannel = null;
-    let realtimeClient = null;
     let applyingRemote = false;
 
     const tabs = [
@@ -117,6 +115,14 @@ createApp({
         stack: error?.stack || ''
       });
       if (debugLogs.value.length > 200) debugLogs.value.shift();
+    }
+
+    function addToast(message, type = 'info') {
+      const id = uid();
+      toasts.value.push({ id, message, type });
+      setTimeout(() => {
+        toasts.value = toasts.value.filter((toast) => toast.id !== id);
+      }, 3200);
     }
 
     function setStatus(mode, origin, banner = '') {
@@ -419,147 +425,150 @@ createApp({
       }
     }
 
-    async function apiFetch(path, options = {}) {
-      const response = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, {
+    async function apiJson(path, options = {}) {
+      const response = await fetch(`${API_BASE}${path}`, {
         headers: {
-          apikey: SUPABASE_KEY,
-          Authorization: `Bearer ${SUPABASE_KEY}`,
           Accept: 'application/json',
           'Content-Type': 'application/json',
           ...options.headers
         },
         ...options
       });
-      if (!response.ok) {
-        throw new Error(`${path} -> HTTP ${response.status}`);
-      }
-      return response.status === 204 ? null : response.json();
-    }
-
-    async function getTable(table, select = '*', query = '') {
-      const url = new URL(`${SUPABASE_URL}/rest/v1/${table}`);
-      url.searchParams.set('select', select);
-      if (query) {
-        query.split('&').filter(Boolean).forEach((pair) => {
-          const [key, value] = pair.split('=');
-          if (key && value !== undefined) url.searchParams.set(key, value);
-        });
-      }
-      const response = await fetch(url, {
-        headers: {
-          apikey: SUPABASE_KEY,
-          Authorization: `Bearer ${SUPABASE_KEY}`,
-          Accept: 'application/json'
-        }
-      });
-      if (!response.ok) throw new Error(`${table} -> HTTP ${response.status}`);
-      return response.json();
-    }
-
-    async function upsertRows(table, rowsPayload, onConflict) {
-      if (!rowsPayload.length) return;
-      await apiFetch(`${table}?on_conflict=${encodeURIComponent(onConflict)}`, {
-        method: 'POST',
-        headers: {
-          Prefer: 'resolution=merge-duplicates,return=minimal'
-        },
-        body: JSON.stringify(rowsPayload)
-      });
-    }
-
-    async function deleteRows(table, query) {
-      await apiFetch(`${table}?${query}`, {
-        method: 'DELETE'
-      });
-    }
-
-    async function pullCloud() {
+      const text = await response.text();
+      let data = null;
       try {
+        data = text ? JSON.parse(text) : null;
+      } catch {
+        data = text;
+      }
+      if (!response.ok) {
+        const detail = typeof data === 'object' && data?.detail ? data.detail : text || `HTTP ${response.status}`;
+        throw new Error(detail);
+      }
+      return data;
+    }
+
+    async function fetchSchools() {
+      return apiJson('/api/schools');
+    }
+
+    async function fetchProducts() {
+      return apiJson('/api/products');
+    }
+
+    async function fetchStock() {
+      return apiJson('/api/stock');
+    }
+
+    async function fetchOrders(date) {
+      return apiJson(`/api/orders?date=${encodeURIComponent(date)}`);
+    }
+
+    async function saveSchoolApi(payload) {
+      return apiJson('/api/schools', { method: 'POST', body: JSON.stringify(payload) });
+    }
+
+    async function deleteSchoolApi(id) {
+      return apiJson(`/api/schools/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    }
+
+    async function saveProductApi(payload) {
+      return apiJson('/api/products', { method: 'POST', body: JSON.stringify(payload) });
+    }
+
+    async function deleteProductApi(code) {
+      return apiJson(`/api/products/${encodeURIComponent(code)}`, { method: 'DELETE' });
+    }
+
+    async function saveStockApi(payload) {
+      return apiJson('/api/stock/upsert', { method: 'POST', body: JSON.stringify(payload) });
+    }
+
+    async function upsertOrderApi(payload) {
+      return apiJson('/api/orders/upsert', { method: 'POST', body: JSON.stringify(payload) });
+    }
+
+    async function clearOrdersApi(date) {
+      return apiJson(`/api/orders?date=${encodeURIComponent(date)}`, { method: 'DELETE' });
+    }
+
+    async function pullApiState() {
+      try {
+        setStatus('Syncing (Polling)', 'API', 'Đang lấy dữ liệu mới từ backend.');
         const [schoolRows, productRows, stockRows, orderRows] = await Promise.all([
-          getTable('schools', 'id,name,bg_color,text_color,border_color,icon,created_at'),
-          getTable('products', 'code,name,unit,price,created_at'),
-          getTable('stock', 'product_code,qty,updated_at'),
-          getTable('daily_orders', 'delivery_date,product_code,school_id,qty', `delivery_date=eq.${deliveryDate.value}`)
+          fetchSchools(),
+          fetchProducts(),
+          fetchStock(),
+          fetchOrders(deliveryDate.value)
         ]);
 
         applyingRemote = true;
-        if (schoolRows.length) schools.value = schoolRows;
-        if (productRows.length) products.value = productRows;
-        if (stockRows.length) {
-          const nextStock = {};
-          stockRows.forEach((row) => { nextStock[row.product_code] = num(row.qty); });
-          stockMap.value = nextStock;
-        }
-        if (orderRows.length) rows.value = ordersToRows(orderRows);
+        if (schoolRows?.length) schools.value = schoolRows;
+        if (productRows?.length) products.value = productRows;
+        if (stockRows && typeof stockRows === 'object') stockMap.value = { ...stockRows };
+        if (Array.isArray(orderRows) && orderRows.length) rows.value = ordersToRows(orderRows);
         rows.value.forEach((row) => {
           ensureRowSchools(row);
           recalcRow(row);
         });
+        parserPreview.value = summaryList.value;
         applyingRemote = false;
-        setStatus('Đồng bộ', 'Supabase', 'Đã kéo dữ liệu cloud về local.');
+        setStatus('Connected (Polling)', 'API', 'Đã đồng bộ dữ liệu qua HTTP polling.');
         persistLocal();
         return true;
       } catch (error) {
         applyingRemote = false;
-        logError('pullCloud', error);
-        setStatus('Offline', 'Local cache', 'Supabase không sẵn sàng; đang dùng local cache.');
+        logError('pullApiState', error);
+        addToast('Không lấy được dữ liệu từ backend', 'error');
+        setStatus('Offline', 'Local cache', 'Backend không khả dụng; đang dùng local cache.');
         return false;
       }
     }
 
-    async function pushCloud() {
-      const schoolRows = schools.value.map((school) => ({
+    async function pushApiState() {
+      const schoolTasks = schools.value.map((school) => saveSchoolApi({
         id: school.id,
         name: school.name,
         bg_color: school.bg_color,
         text_color: school.text_color,
         border_color: school.border_color,
-        icon: school.icon,
-        created_at: school.created_at || today
+        icon: school.icon
       }));
-
-      const productRows = products.value.map((product) => ({
-        code: product.code,
+      const productTasks = products.value.map((product) => saveProductApi({
+        code: norm(product.code),
         name: product.name,
         unit: product.unit,
-        price: num(product.price),
-        created_at: product.created_at || today
+        price: num(product.price)
       }));
-
-      const stockRows = Object.entries(stockMap.value).map(([product_code, qtyValue]) => ({
-        product_code,
-        qty: num(qtyValue),
-        updated_at: new Date().toISOString()
+      const stockTasks = Object.entries(stockMap.value).map(([product_code, qtyValue]) => saveStockApi({
+        product_code: norm(product_code),
+        qty: num(qtyValue)
       }));
+      const orderTasks = rows.value.flatMap((row) => rowToOrderRecords(row).map((order) => upsertOrderApi(order)));
 
-      const orderRows = rows.value.flatMap((row) => rowToOrderRecords(row));
-
-      await upsertRows('schools', schoolRows, 'id');
-      await upsertRows('products', productRows, 'code');
-      await upsertRows('stock', stockRows, 'product_code');
-
-      await deleteRows('daily_orders', `delivery_date=eq.${deliveryDate.value}`);
-      if (orderRows.length) {
-        await upsertRows('daily_orders', orderRows, 'delivery_date,product_code,school_id');
-      }
-      setStatus('Đồng bộ', 'Supabase', 'Đã đẩy dữ liệu local lên cloud.');
+      await Promise.all([...schoolTasks, ...productTasks, ...stockTasks]);
+      await clearOrdersApi(deliveryDate.value);
+      await Promise.all(orderTasks);
     }
 
     async function syncNow() {
       if (syncing) return;
       syncing = true;
       try {
-        setStatus('Đồng bộ', 'Local → Cloud', 'Đang đẩy local lên Supabase rồi kéo cloud về.');
         persistLocal();
-        if (navigator.onLine) {
-          await pushCloud();
-          await pullCloud();
-        } else {
-          setStatus('Offline', 'Local cache', 'Thiết bị đang offline; dữ liệu được giữ ở local.');
+        if (!navigator.onLine) {
+          setStatus('Offline', 'Local cache', 'Thiết bị offline; giữ dữ liệu local.');
+          addToast('Đang offline, dùng dữ liệu local', 'warn');
+          return;
         }
+        setStatus('Syncing (Polling)', 'API', 'Đang đẩy local lên backend.');
+        await pushApiState();
+        await pullApiState();
+        addToast('Đã đồng bộ với backend', 'success');
       } catch (error) {
         logError('syncNow', error);
-        setStatus('Lỗi', 'Local cache', 'Sync không thành công; xem debug log để biết chi tiết.');
+        addToast('Đồng bộ thất bại', 'error');
+        setStatus('Offline', 'Local cache', 'Không đồng bộ được; xem debug log.');
       } finally {
         syncing = false;
         persistLocal();
@@ -605,7 +614,7 @@ createApp({
       productForm.value = { code: '', name: '', unit: '', price: 0 };
     }
 
-    function deleteProduct(code) {
+    async function deleteProduct(code) {
       if (!confirm(`Xoá sản phẩm ${code.toUpperCase()}?`)) return;
       products.value = products.value.filter((product) => norm(product.code) !== norm(code));
       delete stockMap.value[code];
@@ -618,6 +627,13 @@ createApp({
           recalcRow(row);
         }
       });
+      try {
+        await deleteProductApi(code);
+        addToast(`Đã xoá sản phẩm ${code.toUpperCase()}`, 'success');
+      } catch (error) {
+        logError('deleteProduct', error);
+        addToast(`Xoá sản phẩm ${code.toUpperCase()} thất bại`, 'error');
+      }
       scheduleSync();
     }
 
@@ -661,13 +677,20 @@ createApp({
       schoolForm.value = { id: '', name: '', bg_color: 'bg-sky-50', text_color: 'text-sky-800', border_color: 'border-sky-200', icon: 'fa-school', theme: 'bg-sky-50' };
     }
 
-    function deleteSchool(id) {
+    async function deleteSchool(id) {
       if (!confirm(`Xoá trường ${id}?`)) return;
       schools.value = schools.value.filter((school) => norm(school.id) !== norm(id));
       rows.value.forEach((row) => {
         if (row.schoolQtys) delete row.schoolQtys[id];
         recalcRow(row);
       });
+      try {
+        await deleteSchoolApi(id);
+        addToast(`Đã xoá trường ${id}`, 'success');
+      } catch (error) {
+        logError('deleteSchool', error);
+        addToast(`Xoá trường ${id} thất bại`, 'error');
+      }
       scheduleSync();
     }
 
@@ -782,42 +805,14 @@ createApp({
     function loadInitialState() {
       hydrateLocal();
       recalcAllRows();
-      parserPreview.value = summaryList.value;
-    }
-
-    async function setupRealtime() {
-      try {
-        if (!window.supabase?.createClient) throw new Error('Supabase client not available');
-        realtimeClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY, {
-          auth: { persistSession: false, autoRefreshToken: false }
-        });
-        realtimeChannel = realtimeClient.channel('vn-food-v2-sync');
-        ['schools', 'products', 'stock', 'daily_orders'].forEach((table) => {
-          realtimeChannel.on('postgres_changes', { event: '*', schema: 'public', table }, () => {
-            if (navigator.onLine) syncFromCloud();
-          });
-        });
-        realtimeChannel.subscribe((status, error) => {
-          if (status === 'SUBSCRIBED') {
-            stopPollingFallback();
-            setStatus('Realtime', 'Supabase', 'WebSocket hoạt động.');
-          } else if (status === 'CHANNEL_ERROR' || error) {
-            logError('realtime.subscribe', error || new Error(status));
-            startPollingFallback();
-          }
-        });
-      } catch (error) {
-        logError('setupRealtime', error);
-        startPollingFallback();
-      }
     }
 
     function startPollingFallback() {
       stopPollingFallback();
       pollingTimer = setInterval(() => {
-        if (navigator.onLine) syncFromCloud();
-      }, 15000);
-      setStatus('Polling', dataOrigin.value, 'WebSocket không khả dụng; đang đồng bộ dự phòng mỗi 15 giây.');
+        if (navigator.onLine) pullApiState();
+      }, 10000);
+      setStatus('Connected (Polling)', 'API', 'Đang đồng bộ qua HTTP polling mỗi 10 giây.');
     }
 
     function stopPollingFallback() {
@@ -827,156 +822,15 @@ createApp({
       }
     }
 
-    async function syncFromCloud() {
-      try {
-        const [schoolRows, productRows, stockRows, orderRows] = await Promise.all([
-          getTable('schools', 'id,name,bg_color,text_color,border_color,icon,created_at'),
-          getTable('products', 'code,name,unit,price,created_at'),
-          getTable('stock', 'product_code,qty,updated_at'),
-          getTable('daily_orders', 'delivery_date,product_code,school_id,qty', `delivery_date=eq.${deliveryDate.value}`)
-        ]);
-
-        applyingRemote = true;
-        if (schoolRows.length) schools.value = schoolRows;
-        if (productRows.length) products.value = productRows;
-        if (stockRows.length) {
-          const nextStock = {};
-          stockRows.forEach((row) => { nextStock[row.product_code] = num(row.qty); });
-          stockMap.value = nextStock;
-        }
-        if (orderRows.length) rows.value = ordersToRows(orderRows);
-        rows.value.forEach((row) => {
-          ensureRowSchools(row);
-          recalcRow(row);
-        });
-        parserPreview.value = summaryList.value;
-        applyingRemote = false;
-        setStatus('Synced', 'Supabase', 'Đã kéo cloud về local.');
-        persistLocal();
-      } catch (error) {
-        applyingRemote = false;
-        logError('syncFromCloud', error);
-        setStatus('Offline', 'Local cache', 'Không kéo được cloud; đang dùng local cache.');
-      }
-    }
-
-    async function syncToCloud() {
-      const schoolRows = schools.value.map((school) => ({
-        id: school.id,
-        name: school.name,
-        bg_color: school.bg_color,
-        text_color: school.text_color,
-        border_color: school.border_color,
-        icon: school.icon,
-        created_at: school.created_at || today
-      }));
-      const productRows = products.value.map((product) => ({
-        code: product.code,
-        name: product.name,
-        unit: product.unit,
-        price: num(product.price),
-        created_at: product.created_at || today
-      }));
-      const stockRows = Object.entries(stockMap.value).map(([product_code, qtyValue]) => ({
-        product_code,
-        qty: num(qtyValue),
-        updated_at: new Date().toISOString()
-      }));
-      const orderRows = rows.value.flatMap((row) => rowToOrderRecords(row));
-
-      await upsertRows('schools', schoolRows, 'id');
-      await upsertRows('products', productRows, 'code');
-      await upsertRows('stock', stockRows, 'product_code');
-      await deleteRows('daily_orders', `delivery_date=eq.${deliveryDate.value}`);
-      if (orderRows.length) await upsertRows('daily_orders', orderRows, 'delivery_date,product_code,school_id');
-      setStatus('Synced', 'Local → Supabase', 'Đã đẩy local lên cloud.');
-    }
-
-    async function syncNow() {
-      if (syncing) return;
-      syncing = true;
-      try {
-        persistLocal();
-        if (!navigator.onLine) {
-          setStatus('Offline', 'Local cache', 'Thiết bị offline; giữ dữ liệu local.');
-          return;
-        }
-        await syncToCloud();
-        await syncFromCloud();
-      } catch (error) {
-        logError('syncNow', error);
-        setStatus('Lỗi', 'Local cache', 'Không đồng bộ được; xem debug log.');
-      } finally {
-        syncing = false;
-        persistLocal();
-      }
-    }
-
-    function scheduleSync() {
-      persistLocal();
-      if (applyingRemote) return;
-      clearTimeout(syncTimer);
-      syncTimer = setTimeout(() => {
-        if (navigator.onLine) syncNow();
-      }, 900);
-    }
-
-    async function upsertRows(table, rowsPayload, onConflict) {
-      if (!rowsPayload.length) return;
-      const response = await fetch(`${SUPABASE_URL}/rest/v1/${table}?on_conflict=${encodeURIComponent(onConflict)}`, {
-        method: 'POST',
-        headers: {
-          apikey: SUPABASE_KEY,
-          Authorization: `Bearer ${SUPABASE_KEY}`,
-          'Content-Type': 'application/json',
-          Prefer: 'resolution=merge-duplicates,return=minimal'
-        },
-        body: JSON.stringify(rowsPayload)
-      });
-      if (!response.ok) throw new Error(`${table} upsert -> HTTP ${response.status}`);
-    }
-
-    async function deleteRows(table, query) {
-      const response = await fetch(`${SUPABASE_URL}/rest/v1/${table}?${query}`, {
-        method: 'DELETE',
-        headers: {
-          apikey: SUPABASE_KEY,
-          Authorization: `Bearer ${SUPABASE_KEY}`,
-          Prefer: 'return=minimal'
-        }
-      });
-      if (!response.ok && response.status !== 204) throw new Error(`${table} delete -> HTTP ${response.status}`);
-    }
-
-    async function getTable(table, select = '*', query = '') {
-      const url = new URL(`${SUPABASE_URL}/rest/v1/${table}`);
-      url.searchParams.set('select', select);
-      if (query) {
-        query.split('&').filter(Boolean).forEach((pair) => {
-          const [key, value] = pair.split('=');
-          if (key && value !== undefined) url.searchParams.set(key, value);
-        });
-      }
-      const response = await fetch(url, {
-        headers: {
-          apikey: SUPABASE_KEY,
-          Authorization: `Bearer ${SUPABASE_KEY}`,
-          Accept: 'application/json'
-        }
-      });
-      if (!response.ok) throw new Error(`${table} -> HTTP ${response.status}`);
-      return response.json();
-    }
-
     watch([schools, products, stockMap, rows, deliveryDate], () => {
       if (!applyingRemote) scheduleSync();
     }, { deep: true });
 
     onMounted(async () => {
       loadInitialState();
-      setStatus('Local', 'Local cache', 'Đang khởi tạo dữ liệu cục bộ.');
-      await syncFromCloud();
-      await setupRealtime();
+      setStatus('Syncing (Polling)', 'API', 'Đang khởi tạo dữ liệu cục bộ.');
+      await pullApiState();
+      startPollingFallback();
       window.addEventListener('keydown', (event) => {
         if (event.key === 'F2' && currentTab.value === 'matrix') {
           event.preventDefault();
@@ -984,11 +838,12 @@ createApp({
         }
       });
       window.addEventListener('online', () => {
-        setStatus('Online', dataOrigin.value, 'Mạng đã kết nối lại; đang đồng bộ.');
+        setStatus('Syncing (Polling)', dataOrigin.value, 'Mạng đã kết nối lại; đang đồng bộ.');
         syncNow();
       });
       window.addEventListener('offline', () => {
         setStatus('Offline', 'Local cache', 'Đang offline; dữ liệu được giữ ở local.');
+        addToast('Mất kết nối mạng', 'warn');
       });
       window.addEventListener('afterprint', () => {
         printSchoolId.value = 'all';
@@ -1007,6 +862,7 @@ createApp({
       stockMap,
       parserText,
       parserPreview,
+      toasts,
       productFilter,
       schoolFilter,
       stockFilter,
