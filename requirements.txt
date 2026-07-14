@@ -1,0 +1,15 @@
+# --- FASTAPI CORE WEB FRAMEWORK ---
+fastapi>=0.110.0
+pydantic>=2.6.0
+pydantic-settings>=2.2.0
+
+# --- PRODUCTION ASGI SERVER ---
+# Includes compiled performance packages such as uvloop and httptools.
+uvicorn[standard]>=0.28.0
+
+# --- SUPABASE & DATABASE CONNECTOR (IF NEEDED) ---
+supabase>=2.4.0
+httpx>=0.27.0
+
+# --- ADDITIONAL UTIL PACKAGES ---
+python-multipart>=0.0.9
