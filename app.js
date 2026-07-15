@@ -12,7 +12,7 @@ createApp({
 
     const today = new Date().toISOString().slice(0, 10);
     const clone = (value) => JSON.parse(JSON.stringify(value));
-    const uid = () => `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const uid = () => (crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`);
     const norm = (value) => String(value || '').trim().toLowerCase();
     const num = (value) => {
       const parsed = parseFloat(String(value ?? '').replace(',', '.'));
@@ -35,19 +35,22 @@ createApp({
     const themeMap = Object.fromEntries(themes.map((theme) => [theme.bg_color, theme]));
 
     const defaultSchools = [
-      { id: 'tanAn', name: 'Trường mầm non Tân An', bg_color: 'bg-sky-50', text_color: 'text-sky-800', border_color: 'border-sky-200', icon: 'fa-school', created_at: today },
-      { id: 'mitSuBa', name: 'Trường mầm non Mitsuba', bg_color: 'bg-emerald-50', text_color: 'text-emerald-800', border_color: 'border-emerald-200', icon: 'fa-seedling', created_at: today },
-      { id: 'lcTre', name: 'Trường mầm non Lộc Trẻ', bg_color: 'bg-amber-50', text_color: 'text-amber-800', border_color: 'border-amber-200', icon: 'fa-bowl-rice', created_at: today },
-      { id: 'sunKid', name: 'Trường mầm non Sun Kid', bg_color: 'bg-violet-50', text_color: 'text-violet-800', border_color: 'border-violet-200', icon: 'fa-apple-whole', created_at: today }
+      { id: uid(), code: 'tanAn', name: 'Trường mầm non Tân An', bg_color: 'bg-sky-50', text_color: 'text-sky-800', border_color: 'border-sky-200', icon: 'fa-school', created_at: today },
+      { id: uid(), code: 'mitSuBa', name: 'Trường mầm non Mitsuba', bg_color: 'bg-emerald-50', text_color: 'text-emerald-800', border_color: 'border-emerald-200', icon: 'fa-seedling', created_at: today },
+      { id: uid(), code: 'lcTre', name: 'Trường mầm non Lộc Trẻ', bg_color: 'bg-amber-50', text_color: 'text-amber-800', border_color: 'border-amber-200', icon: 'fa-bowl-rice', created_at: today },
+      { id: uid(), code: 'sunKid', name: 'Trường mầm non Sun Kid', bg_color: 'bg-violet-50', text_color: 'text-violet-800', border_color: 'border-violet-200', icon: 'fa-apple-whole', created_at: today }
     ];
     const defaultProducts = [
-      { code: 'tv', name: 'Thịt vai heo VietGap', unit: 'Kg', price: 128000, created_at: today },
-      { code: 'cl', name: 'Cải lá xanh', unit: 'Kg', price: 18000, created_at: today },
-      { code: 'hl', name: 'Hàu sữa', unit: 'Kg', price: 96000, created_at: today },
-      { code: 'tr', name: 'Trứng gà', unit: 'Quả', price: 3000, created_at: today },
-      { code: 'sua', name: 'Sữa tươi', unit: 'Lít', price: 28000, created_at: today }
+      { id: uid(), code: 'tv', name: 'Thịt vai heo VietGap', unit: 'Kg', price: 128000, created_at: today },
+      { id: uid(), code: 'cl', name: 'Cải lá xanh', unit: 'Kg', price: 18000, created_at: today },
+      { id: uid(), code: 'hl', name: 'Hàu sữa', unit: 'Kg', price: 96000, created_at: today },
+      { id: uid(), code: 'tr', name: 'Trứng gà', unit: 'Quả', price: 3000, created_at: today },
+      { id: uid(), code: 'sua', name: 'Sữa tươi', unit: 'Lít', price: 28000, created_at: today }
     ];
-    const defaultStock = { tv: 3.5, cl: 8, hl: 2, tr: 100, sua: 12 };
+    const defaultStock = {};
+    defaultProducts.forEach((product, index) => {
+      defaultStock[product.id] = [3.5, 8, 2, 100, 12][index];
+    });
 
     const emptyRow = () => ({
       id: uid(),
@@ -70,6 +73,11 @@ createApp({
       stockMap: clone(defaultStock),
       deliveryDate: today
     };
+
+    const schoolKey = (school) => String(school?.id || school?.code || '');
+    const productKey = (product) => String(product?.id || product?.code || '');
+    const resolveSchool = (value) => schools.value.find((school) => schoolKey(school) === String(value) || norm(school.code) === norm(value) || norm(school.id) === norm(value));
+    const resolveProduct = (value) => products.value.find((product) => productKey(product) === String(value) || norm(product.code) === norm(value) || norm(product.id) === norm(value));
 
     const currentTab = ref('matrix');
     const rows = ref(state.rows);
@@ -94,11 +102,13 @@ createApp({
     const productForm = ref({ code: '', name: '', unit: '', price: 0 });
     const schoolForm = ref({ id: '', name: '', bg_color: 'bg-sky-50', text_color: 'text-sky-800', border_color: 'border-sky-200', icon: 'fa-school', theme: 'bg-sky-50' });
     const stockForm = ref({ product_code: '', qty: 0 });
+    const activeEditingCell = ref(null);
 
     let syncing = false;
     let syncTimer = null;
     let pollingTimer = null;
     let applyingRemote = false;
+    const dirtyRows = new Set();
 
     const tabs = [
       { id: 'matrix', label: 'Nhập lưới', icon: 'fa-solid fa-table-cells' },
@@ -130,6 +140,37 @@ createApp({
       }, 3200);
     }
 
+    function markRowDirty(row) {
+      if (!row?.id) return;
+      row.isDirty = true;
+      dirtyRows.add(row.id);
+    }
+
+    function clearRowDirty(row) {
+      if (!row?.id) return;
+      row.isDirty = false;
+      dirtyRows.delete(row.id);
+    }
+
+    function lockCell(row, field) {
+      activeEditingCell.value = { rowId: row?.id || null, field };
+      markRowDirty(row);
+    }
+
+    function setActiveEditingCell(rowId, field) {
+      activeEditingCell.value = { rowId, field };
+    }
+
+    function clearActiveEditingCell() {
+      activeEditingCell.value = null;
+    }
+
+    function unlockCell(row, field) {
+      if (activeEditingCell.value?.rowId === row?.id && activeEditingCell.value?.field === field) {
+        activeEditingCell.value = null;
+      }
+    }
+
     function setStatus(mode, origin, banner = '') {
       syncStatus.value = mode;
       dataOrigin.value = origin;
@@ -156,22 +197,25 @@ createApp({
     function ensureRowSchools(row) {
       if (!row.schoolQtys) row.schoolQtys = {};
       schools.value.forEach((school) => {
-        if (row.schoolQtys[school.id] === undefined) row.schoolQtys[school.id] = 0;
+        const key = schoolKey(school);
+        if (row.schoolQtys[key] === undefined) row.schoolQtys[key] = 0;
       });
       Object.keys(row.schoolQtys).forEach((key) => {
-        if (!schools.value.some((school) => school.id === key)) delete row.schoolQtys[key];
+        if (!schools.value.some((school) => schoolKey(school) === String(key))) delete row.schoolQtys[key];
       });
     }
 
     function recalcRow(row) {
       ensureRowSchools(row);
-      const product = products.value.find((item) => norm(item.code) === norm(row.shortcut));
+      const product = resolveProduct(row.productId || row.shortcut);
       if (product) {
+        row.productId = productKey(product);
+        row.shortcut = product.code;
         row.productName = product.name;
         row.unit = product.unit;
         row.price = num(product.price);
       }
-      row.totalQty = round3(schools.value.reduce((sum, school) => sum + num(row.schoolQtys[school.id]), 0));
+      row.totalQty = round3(schools.value.reduce((sum, school) => sum + num(row.schoolQtys[schoolKey(school)]), 0));
       row.subTotal = Math.round(row.totalQty * num(row.price));
     }
 
@@ -200,12 +244,14 @@ createApp({
 
     function pickProduct(row, product) {
       row.shortcut = product.code;
+      row.productId = productKey(product);
       row.productName = product.name;
       row.unit = product.unit;
       row.price = num(product.price);
       row.suggestions = [];
       row.showSuggestions = false;
       recalcRow(row);
+      markRowDirty(row);
       scheduleSync();
     }
 
@@ -214,11 +260,13 @@ createApp({
       row.suggestions = findSuggestions(row.shortcut);
       row.suggestIndex = 0;
       row.showSuggestions = true;
-      const exact = products.value.find((product) => norm(product.code) === norm(row.shortcut));
+      markRowDirty(row);
+      const exact = resolveProduct(row.shortcut);
       if (exact) {
         pickProduct(row, exact);
         return;
       }
+      row.productId = '';
       row.productName = '';
       row.unit = '';
       row.price = 0;
@@ -244,7 +292,7 @@ createApp({
 
     function addRow() {
       const row = emptyRow();
-      schools.value.forEach((school) => { row.schoolQtys[school.id] = 0; });
+      schools.value.forEach((school) => { row.schoolQtys[schoolKey(school)] = 0; });
       rows.value.push(row);
       scheduleSync();
     }
@@ -261,13 +309,14 @@ createApp({
     }
 
     function rowToOrderRecords(row) {
-      if (!norm(row.shortcut)) return [];
+      const product = resolveProduct(row.productId || row.shortcut);
+      if (!product) return [];
       return schools.value.flatMap((school) => {
-        const qtyValue = num(row.schoolQtys?.[school.id]);
+        const qtyValue = num(row.schoolQtys?.[schoolKey(school)]);
         return qtyValue > 0 ? [{
           delivery_date: deliveryDate.value,
-          product_code: row.shortcut,
-          school_id: school.id,
+          product_id: productKey(product),
+          school_id: schoolKey(school),
           qty: round3(qtyValue)
         }] : [];
       });
@@ -276,20 +325,21 @@ createApp({
     function ordersToRows(orderRecords) {
       const map = {};
       orderRecords.forEach((order) => {
-        const code = norm(order.product_code);
-        if (!code) return;
-        if (!map[code]) {
-          const product = products.value.find((item) => norm(item.code) === code);
-          map[code] = emptyRow();
-          map[code].shortcut = code;
+        const productId = String(order.product_id || order.product_code || '');
+        if (!productId) return;
+        if (!map[productId]) {
+          const product = resolveProduct(productId);
+          map[productId] = emptyRow();
+          map[productId].productId = productKey(product || { id: productId });
+          map[productId].shortcut = product?.code || order.product_code || '';
           if (product) {
-            map[code].productName = product.name;
-            map[code].unit = product.unit;
-            map[code].price = num(product.price);
+            map[productId].productName = product.name;
+            map[productId].unit = product.unit;
+            map[productId].price = num(product.price);
           }
-          schools.value.forEach((school) => { map[code].schoolQtys[school.id] = 0; });
+          schools.value.forEach((school) => { map[productId].schoolQtys[schoolKey(school)] = 0; });
         }
-        map[code].schoolQtys[order.school_id] = num(order.qty);
+        map[productId].schoolQtys[String(order.school_id)] = num(order.qty);
       });
       return Object.values(map).map((row) => {
         recalcRow(row);
@@ -299,15 +349,16 @@ createApp({
 
     function groupOrdersBySchool() {
       const buckets = {};
-      schools.value.forEach((school) => { buckets[school.id] = {}; });
+      schools.value.forEach((school) => { buckets[schoolKey(school)] = {}; });
       rows.value.forEach((row) => {
-        const product = products.value.find((item) => norm(item.code) === norm(row.shortcut));
+        const product = resolveProduct(row.productId || row.shortcut);
         if (!product) return;
         schools.value.forEach((school) => {
-          const qtyValue = num(row.schoolQtys?.[school.id]);
+          const schoolId = schoolKey(school);
+          const qtyValue = num(row.schoolQtys?.[schoolId]);
           if (!qtyValue) return;
-          if (!buckets[school.id][product.code]) {
-            buckets[school.id][product.code] = {
+          if (!buckets[schoolId][product.code]) {
+            buckets[schoolId][product.code] = {
               code: product.code,
               name: product.name,
               unit: product.unit,
@@ -316,8 +367,8 @@ createApp({
               amount: 0
             };
           }
-          buckets[school.id][product.code].qty += qtyValue;
-          buckets[school.id][product.code].amount = Math.round(buckets[school.id][product.code].qty * num(product.price));
+          buckets[schoolId][product.code].qty += qtyValue;
+          buckets[schoolId][product.code].amount = Math.round(buckets[schoolId][product.code].qty * num(product.price));
         });
       });
       return buckets;
@@ -325,10 +376,10 @@ createApp({
 
     const totalBySchool = computed(() => {
       const totals = {};
-      schools.value.forEach((school) => { totals[school.id] = 0; });
+      schools.value.forEach((school) => { totals[schoolKey(school)] = 0; });
       rows.value.forEach((row) => {
         schools.value.forEach((school) => {
-          totals[school.id] += num(row.schoolQtys?.[school.id]) * num(row.price);
+          totals[schoolKey(school)] += num(row.schoolQtys?.[schoolKey(school)]) * num(row.price);
         });
       });
       return totals;
@@ -339,16 +390,23 @@ createApp({
     const summaryList = computed(() => {
       const map = {};
       rows.value.forEach((row) => {
-        const product = products.value.find((item) => norm(item.code) === norm(row.shortcut));
+        const product = resolveProduct(row.productId || row.shortcut);
         if (!product) return;
         if (!map[product.code]) {
-          map[product.code] = { code: product.code, name: product.name, unit: product.unit, price: num(product.price), demandQty: 0 };
+          map[product.code] = {
+            id: productKey(product),
+            code: product.code,
+            name: product.name,
+            unit: product.unit,
+            price: num(product.price),
+            demandQty: 0
+          };
         }
         map[product.code].demandQty += row.totalQty;
       });
       return Object.values(map)
         .map((item) => {
-          const stockQty = num(stockMap.value[item.code]);
+          const stockQty = num(stockMap.value[item.id] ?? stockMap.value[item.code]);
           const realBuy = Math.max(0, round3(item.demandQty - stockQty));
           return { ...item, stockQty, realBuy, subTotal: Math.round(realBuy * item.price) };
         })
@@ -365,7 +423,7 @@ createApp({
 
     const filteredSchools = computed(() => {
       const q = norm(schoolFilter.value);
-      return !q ? schools.value : schools.value.filter((item) => norm(item.id).includes(q) || norm(item.name).includes(q));
+      return !q ? schools.value : schools.value.filter((item) => norm(item.id).includes(q) || norm(item.code).includes(q) || norm(item.name).includes(q));
     });
 
     const filteredStockProducts = computed(() => {
@@ -376,9 +434,10 @@ createApp({
     const receipts = computed(() => {
       const buckets = groupOrdersBySchool();
       return schools.value.map((school) => {
-        const items = Object.values(buckets[school.id]).filter((item) => item.qty > 0).sort((a, b) => norm(a.code).localeCompare(norm(b.code)));
+        const schoolId = schoolKey(school);
+        const items = Object.values(buckets[schoolId]).filter((item) => item.qty > 0).sort((a, b) => norm(a.code).localeCompare(norm(b.code)));
         return {
-          id: school.id,
+          id: schoolId,
           name: school.name,
           theme: school,
           items,
@@ -411,7 +470,7 @@ createApp({
           products.value = clone(defaultProducts);
           stockMap.value = clone(defaultStock);
           rows.value.forEach((row) => {
-            schools.value.forEach((school) => { row.schoolQtys[school.id] = 0; });
+            schools.value.forEach((school) => { row.schoolQtys[schoolKey(school)] = 0; });
           });
           return;
         }
@@ -508,10 +567,79 @@ createApp({
         ]);
 
         applyingRemote = true;
-        if (schoolRows?.length) schools.value = schoolRows;
-        if (productRows?.length) products.value = productRows;
+        if (Array.isArray(schoolRows) && schoolRows.length) {
+          const byId = new Map(schoolRows.map((school) => {
+            const next = {
+              ...school,
+              code: school.code || school.id,
+              id: school.id || crypto.randomUUID()
+            };
+            return [schoolKey(next), next];
+          }));
+          const nextSchools = [];
+          schools.value.forEach((localSchool) => {
+            const key = schoolKey(localSchool);
+            const incoming = byId.get(key);
+            const isLocked = false;
+            if (incoming) {
+              nextSchools.push(incoming);
+              byId.delete(key);
+              return;
+            }
+            if (!key || isLocked) nextSchools.push(localSchool);
+          });
+          byId.forEach((school) => nextSchools.push(school));
+          schools.value = nextSchools;
+        }
+        if (Array.isArray(productRows) && productRows.length) {
+          const byId = new Map(productRows.map((product) => {
+            const next = {
+              ...product,
+              code: product.code || product.shortcut || '',
+              id: product.id || crypto.randomUUID()
+            };
+            return [productKey(next), next];
+          }));
+          const nextProducts = [];
+          products.value.forEach((localProduct) => {
+            const key = productKey(localProduct);
+            const incoming = byId.get(key);
+            const isLocked = false;
+            if (incoming) {
+              nextProducts.push(incoming);
+              byId.delete(key);
+              return;
+            }
+            if (!key || isLocked) nextProducts.push(localProduct);
+          });
+          byId.forEach((product) => nextProducts.push(product));
+          products.value = nextProducts;
+        }
         if (stockRows && typeof stockRows === 'object') stockMap.value = { ...stockRows };
-        if (Array.isArray(orderRows) && orderRows.length) rows.value = ordersToRows(orderRows);
+        if (Array.isArray(orderRows) && orderRows.length) {
+          const incomingRows = ordersToRows(orderRows);
+          const incomingByProductId = new Map(incomingRows.map((row) => [String(row.productId || ''), row]));
+          const nextRows = [];
+          rows.value.forEach((localRow) => {
+            const key = String(localRow.productId || '');
+            const incoming = incomingByProductId.get(key);
+            const isLocked = Boolean(localRow.isDirty) || dirtyRows.has(localRow.id) || activeEditingCell.value?.rowId === localRow.id;
+            if (incoming) {
+              if (isLocked) {
+                nextRows.push(localRow);
+              } else {
+                nextRows.push(incoming);
+                incomingByProductId.delete(key);
+              }
+              return;
+            }
+            if (isLocked || !key) {
+              nextRows.push(localRow);
+            }
+          });
+          incomingByProductId.forEach((incoming) => nextRows.push(incoming));
+          rows.value = nextRows.length ? nextRows : [emptyRow()];
+        }
         rows.value.forEach((row) => {
           ensureRowSchools(row);
           recalcRow(row);
@@ -532,7 +660,7 @@ createApp({
 
     async function pushApiState() {
       const schoolTasks = schools.value.map((school) => saveSchoolApi({
-        id: school.id,
+        code: school.code || school.id,
         name: school.name,
         bg_color: school.bg_color,
         text_color: school.text_color,
@@ -540,13 +668,13 @@ createApp({
         icon: school.icon
       }));
       const productTasks = products.value.map((product) => saveProductApi({
-        code: norm(product.code),
+        code: product.code,
         name: product.name,
         unit: product.unit,
         price: num(product.price)
       }));
-      const stockTasks = Object.entries(stockMap.value).map(([product_code, qtyValue]) => saveStockApi({
-        product_code: norm(product_code),
+      const stockTasks = Object.entries(stockMap.value).map(([product_id, qtyValue]) => saveStockApi({
+        product_id: productKey(resolveProduct(product_id) || { id: product_id }),
         qty: num(qtyValue)
       }));
       const orderTasks = rows.value.flatMap((row) => rowToOrderRecords(row).map((order) => upsertOrderApi(order)));
@@ -569,6 +697,8 @@ createApp({
         setStatus('Syncing (Polling)', 'API', 'Đang đẩy local lên backend.');
         await pushApiState();
         await pullApiState();
+        rows.value.forEach((row) => clearRowDirty(row));
+        dirtyRows.clear();
         addToast('Đã đồng bộ với backend', 'success');
       } catch (error) {
         logError('syncNow', error);
@@ -592,18 +722,20 @@ createApp({
     function saveProduct() {
       const code = norm(productForm.value.code);
       if (!code || !productForm.value.name.trim()) return;
-      const payload = {
+      const existing = products.value.find((product) => norm(product.code) === code || norm(product.id) === code);
+      const record = {
+        id: existing?.id || crypto.randomUUID(),
         code,
         name: productForm.value.name.trim(),
         unit: productForm.value.unit.trim() || '-',
         price: num(productForm.value.price),
         created_at: today
       };
-      const index = products.value.findIndex((product) => norm(product.code) === code);
-      if (index >= 0) products.value[index] = payload;
-      else products.value.unshift(payload);
+      const index = products.value.findIndex((product) => norm(product.code) === code || norm(product.id) === code);
+      if (index >= 0) products.value[index] = { ...products.value[index], ...record };
+      else products.value.unshift(record);
       rows.value.forEach((row) => {
-        if (norm(row.shortcut) === code) pickProduct(row, payload);
+        if (norm(row.shortcut) === code) pickProduct(row, record);
       });
       resetProductForm();
       scheduleSync();
@@ -621,11 +753,14 @@ createApp({
 
     async function deleteProduct(code) {
       if (!confirm(`Xoá sản phẩm ${code.toUpperCase()}?`)) return;
-      products.value = products.value.filter((product) => norm(product.code) !== norm(code));
+      products.value = products.value.filter((product) => norm(product.code) !== norm(code) && norm(product.id) !== norm(code));
+      const product = resolveProduct(code);
       delete stockMap.value[code];
+      if (product) delete stockMap.value[productKey(product)];
       rows.value.forEach((row) => {
         if (norm(row.shortcut) === norm(code)) {
           row.shortcut = '';
+          row.productId = '';
           row.productName = '';
           row.unit = '';
           row.price = 0;
@@ -651,10 +786,12 @@ createApp({
     }
 
     function saveSchool() {
-      const id = norm(schoolForm.value.id);
-      if (!id || !schoolForm.value.name.trim()) return;
-      const payload = {
-        id,
+      const code = norm(schoolForm.value.id);
+      if (!code || !schoolForm.value.name.trim()) return;
+      const existing = schools.value.find((school) => norm(school.code) === code || norm(school.id) === code);
+      const record = {
+        id: existing?.id || crypto.randomUUID(),
+        code,
         name: schoolForm.value.name.trim(),
         bg_color: schoolForm.value.bg_color,
         text_color: schoolForm.value.text_color,
@@ -662,11 +799,12 @@ createApp({
         icon: schoolForm.value.icon,
         created_at: today
       };
-      const index = schools.value.findIndex((school) => norm(school.id) === id);
-      if (index >= 0) schools.value[index] = payload;
-      else schools.value.unshift(payload);
+      const index = schools.value.findIndex((school) => norm(school.code) === code || norm(school.id) === code);
+      if (index >= 0) schools.value[index] = { ...schools.value[index], ...record };
+      else schools.value.unshift(record);
       rows.value.forEach((row) => {
-        if (!row.schoolQtys[id]) row.schoolQtys[id] = 0;
+        const rowKey = schoolKey(record);
+        if (!row.schoolQtys[rowKey]) row.schoolQtys[rowKey] = 0;
       });
       resetSchoolForm();
       scheduleSync();
@@ -674,7 +812,7 @@ createApp({
 
     function editSchool(school) {
       editingSchool.value = true;
-      schoolForm.value = clone({ ...school, theme: school.bg_color });
+      schoolForm.value = clone({ ...school, id: school.code || school.id, theme: school.bg_color });
     }
 
     function resetSchoolForm() {
@@ -684,9 +822,13 @@ createApp({
 
     async function deleteSchool(id) {
       if (!confirm(`Xoá trường ${id}?`)) return;
-      schools.value = schools.value.filter((school) => norm(school.id) !== norm(id));
+      const target = resolveSchool(id);
+      schools.value = schools.value.filter((school) => norm(school.id) !== norm(id) && norm(school.code) !== norm(id));
       rows.value.forEach((row) => {
-        if (row.schoolQtys) delete row.schoolQtys[id];
+        if (row.schoolQtys) {
+          delete row.schoolQtys[id];
+          if (target) delete row.schoolQtys[schoolKey(target)];
+        }
         recalcRow(row);
       });
       try {
@@ -716,7 +858,9 @@ createApp({
     function saveStock() {
       const code = norm(stockForm.value.product_code);
       if (!code) return;
-      stockMap.value = { ...stockMap.value, [code]: num(stockForm.value.qty) };
+      const product = resolveProduct(code);
+      if (!product) return;
+      stockMap.value = { ...stockMap.value, [productKey(product)]: num(stockForm.value.qty) };
       stockForm.value = { product_code: '', qty: 0 };
       scheduleSync();
     }
@@ -736,17 +880,17 @@ createApp({
           const [rawCode, rest = ''] = line.split(':');
           const code = norm(rawCode);
           if (!code) return;
-          const product = products.value.find((item) => norm(item.code) === code || norm(item.name).includes(code));
+          const product = products.value.find((item) => norm(item.code) === code || norm(item.name).includes(code) || norm(item.id) === code);
           if (!product) return;
-          let row = rows.value.find((item) => norm(item.shortcut) === norm(product.code));
+          let row = rows.value.find((item) => norm(item.shortcut) === norm(product.code) || String(item.productId || '') === productKey(product));
           if (!row) {
             row = emptyRow();
-            schools.value.forEach((school) => { row.schoolQtys[school.id] = 0; });
+            schools.value.forEach((school) => { row.schoolQtys[schoolKey(school)] = 0; });
             rows.value.push(row);
           }
           pickProduct(row, product);
           const qtys = rest.trim().split(/\s+/).filter(Boolean).map(num);
-          schools.value.forEach((school, index) => { row.schoolQtys[school.id] = qtys[index] || 0; });
+          schools.value.forEach((school, index) => { row.schoolQtys[schoolKey(school)] = qtys[index] || 0; });
           recalcRow(row);
         });
         parserPreview.value = summaryList.value;
@@ -895,6 +1039,12 @@ createApp({
       themeStyle,
       money,
       qty,
+      activeEditingCell,
+      lockCell,
+      unlockCell,
+      setActiveEditingCell,
+      clearActiveEditingCell,
+      markRowDirty,
       addRow,
       removeRow,
       clearRows,
@@ -919,6 +1069,7 @@ createApp({
       saveStock,
       exportCSV,
       copyDebugLogs,
+      scheduleSync,
       syncNow,
       printAllReceipts,
       printSchool
