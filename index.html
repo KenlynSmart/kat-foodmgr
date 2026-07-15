@@ -87,7 +87,7 @@
                   <th class="th w-20 text-center">ĐVT</th>
                   <th class="th w-28 text-right">Giá</th>
                   <th v-for="school in schools" :key="school.id" class="th text-center w-28 border-l">
-                    {{ school.name }}
+                    {{ school.code || school.id }}
                   </th>
                   <th class="th w-28 text-center">Tổng nhu cầu</th>
                   <th class="th w-32 text-right">Thành tiền</th>
@@ -98,7 +98,7 @@
                 <tr v-for="(row, index) in rows" :key="row.id" class="align-top hover:bg-slate-50">
                   <td class="px-3 py-3 text-center text-slate-400">{{ index + 1 }}</td>
                   <td class="px-3 py-3 relative">
-                    <input v-model="row.shortcut" @input="onShortcutInput(row)" @focus="openSuggestions(row)" @keydown="onShortcutKeydown($event, row)" @blur="closeSuggestions(row)" placeholder="tv, cl..." class="input uppercase font-semibold tracking-wide">
+                    <input v-model="row.shortcut" @input="onShortcutInput(row)" @focus="lockCell(row, 'shortcut'); openSuggestions(row)" @keydown="onShortcutKeydown($event, row)" @blur="unlockCell(row, 'shortcut'); closeSuggestions(row)" placeholder="tv, cl..." class="input uppercase font-semibold tracking-wide">
                     <div v-if="row.showSuggestions && row.suggestions.length" class="suggestions">
                       <button v-for="(product, idx) in row.suggestions" :key="product.code" @mousedown.prevent="pickProduct(row, product)" class="suggestion-item" :class="idx === row.suggestIndex ? 'bg-emerald-50' : ''">
                         <span><span class="font-bold text-emerald-700">{{ product.code }}</span> · {{ product.name }}</span>
@@ -113,7 +113,7 @@
                   <td class="px-3 py-3 text-center">{{ row.unit || '-' }}</td>
                   <td class="px-3 py-3 text-right font-semibold">{{ row.price ? money(row.price) : '-' }}</td>
                   <td v-for="school in schools" :key="school.id" class="px-2 py-2 border-l border-slate-100">
-                    <input type="number" min="0" step="any" v-model.number="row.schoolQtys[school.id]" @input="recalcRow(row)" class="input text-center">
+                    <input type="number" min="0" step="any" v-model.number="row.schoolQtys[school.id]" @focus="lockCell(row, school.id)" @blur="unlockCell(row, school.id)" @input="markRowDirty(row); recalcRow(row); scheduleSync()" class="input text-center">
                   </td>
                   <td class="px-3 py-3 text-center font-bold text-emerald-700">{{ qty(row.totalQty) }}</td>
                   <td class="px-3 py-3 text-right font-extrabold">{{ money(row.subTotal) }}</td>
@@ -133,7 +133,7 @@
           <div v-for="school in schools" :key="school.id" class="rounded-2xl border p-4" :style="themeStyle(school)">
             <div class="flex items-center justify-between">
               <div>
-                <div class="text-xs uppercase font-bold opacity-80">{{ school.id }}</div>
+                <div class="text-xs uppercase font-bold opacity-80">{{ school.code || school.id }}</div>
                 <div class="font-semibold">{{ school.name }}</div>
               </div>
               <i class="fa-solid text-2xl" :class="school.icon || 'fa-school'"></i>
@@ -202,7 +202,7 @@
                   <td class="px-3 py-2 text-right">{{ money(product.price) }}</td>
                   <td class="px-3 py-2 text-right whitespace-nowrap">
                     <button @click="editProduct(product)" class="text-emerald-700 mr-2">Sửa</button>
-                    <button @click="deleteProduct(product.code)" class="text-rose-600">Xoá</button>
+                    <button @click="deleteProduct(product.id || product.code)" class="text-rose-600">Xoá</button>
                   </td>
                 </tr>
               </tbody>
@@ -219,7 +219,7 @@
             <input v-model="schoolFilter" class="input w-56" placeholder="Tìm trường">
           </div>
           <div class="grid sm:grid-cols-3 gap-2">
-            <input v-model="schoolForm.id" :disabled="editingSchool" class="input" placeholder="id">
+            <input v-model="schoolForm.id" :disabled="editingSchool" class="input" placeholder="code">
             <input v-model="schoolForm.name" class="input" placeholder="name">
             <select v-model="schoolForm.theme" @change="applySchoolTheme(schoolForm.theme)" class="input">
               <option v-for="theme in themes" :key="theme.bg_color" :value="theme.bg_color">{{ theme.label }}</option>
@@ -240,16 +240,16 @@
           <div class="overflow-x-auto">
             <table class="min-w-full text-sm">
               <thead class="thead">
-                <tr><th class="th">ID</th><th class="th">Tên</th><th class="th">Theme</th><th class="th"></th></tr>
+                <tr><th class="th">Code</th><th class="th">Tên</th><th class="th">Theme</th><th class="th"></th></tr>
               </thead>
               <tbody class="divide-y divide-slate-100">
                 <tr v-for="school in filteredSchools" :key="school.id">
-                  <td class="px-3 py-2 font-semibold">{{ school.id }}</td>
+                  <td class="px-3 py-2 font-semibold">{{ school.code || school.id }}</td>
                   <td class="px-3 py-2">{{ school.name }}</td>
                   <td class="px-3 py-2"><span class="px-2 py-1 rounded-full border" :style="themeStyle(school)">{{ school.bg_color }}</span></td>
                   <td class="px-3 py-2 text-right whitespace-nowrap">
                     <button @click="editSchool(school)" class="text-emerald-700 mr-2">Sửa</button>
-                    <button @click="deleteSchool(school.id)" class="text-rose-600">Xoá</button>
+                    <button @click="deleteSchool(school.id || school.code)" class="text-rose-600">Xoá</button>
                   </td>
                 </tr>
               </tbody>
@@ -270,7 +270,7 @@
           <div class="rounded-2xl border border-slate-100 p-4 space-y-3">
             <select v-model="stockForm.product_code" class="input">
               <option disabled value="">Chọn sản phẩm</option>
-              <option v-for="product in products" :key="product.code" :value="product.code">{{ product.code }} · {{ product.name }}</option>
+              <option v-for="product in products" :key="product.id || product.code" :value="product.code">{{ product.code }} · {{ product.name }}</option>
             </select>
             <input v-model.number="stockForm.qty" type="number" step="any" min="0" class="input" placeholder="qty">
             <button @click="saveStock" class="btn-primary w-full">Lưu tồn kho</button>
@@ -281,13 +281,13 @@
                 <tr><th class="th">Product</th><th class="th text-right">Qty</th><th class="th"></th></tr>
               </thead>
               <tbody class="divide-y divide-slate-100">
-                <tr v-for="product in filteredStockProducts" :key="product.code">
+                <tr v-for="product in filteredStockProducts" :key="product.id || product.code">
                   <td class="px-3 py-2">{{ product.code }} · {{ product.name }}</td>
                   <td class="px-3 py-2 text-right w-48">
-                    <input v-model.number="stockMap[product.code]" type="number" step="any" min="0" @change="scheduleSync" class="input w-32 text-right">
+                    <input v-model.number="stockMap[product.id || product.code]" type="number" step="any" min="0" @focus="setActiveEditingCell(`stock:${product.id || product.code}`, 'qty')" @blur="clearActiveEditingCell(); scheduleSync()" @change="scheduleSync" class="input w-32 text-right">
                   </td>
                   <td class="px-3 py-2 text-right">
-                    <button @click="stockForm = { product_code: product.code, qty: stockMap[product.code] || 0 }" class="text-emerald-700">Chọn</button>
+                    <button @click="stockForm = { product_code: product.code, qty: stockMap[product.id || product.code] || 0 }" class="text-emerald-700">Chọn</button>
                   </td>
                 </tr>
               </tbody>
@@ -311,13 +311,13 @@
             </thead>
             <tbody class="divide-y divide-slate-100">
               <tr v-for="school in schools" :key="school.id">
-                <td class="px-3 py-2 font-semibold">{{ school.id }}</td>
+                <td class="px-3 py-2 font-semibold">{{ school.code || school.id }}</td>
                 <td class="px-3 py-2">{{ school.name }}</td>
                 <td class="px-3 py-2">{{ school.bg_color }}</td>
                 <td class="px-3 py-2">{{ school.icon }}</td>
                 <td class="px-3 py-2 text-right whitespace-nowrap">
                   <button @click="editSchool(school)" class="text-emerald-700 mr-2">Sửa</button>
-                  <button @click="deleteSchool(school.id)" class="text-rose-600">Xoá</button>
+                    <button @click="deleteSchool(school.code || school.id)" class="text-rose-600">Xoá</button>
                 </td>
               </tr>
             </tbody>

@@ -1,6 +1,8 @@
 import os
 from pathlib import Path
+from datetime import date, datetime
 from typing import Any, Dict, List, Optional
+from uuid import UUID
 
 from fastapi import FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
@@ -72,7 +74,7 @@ def require_read_client() -> Client:
 
 
 class SchoolSchema(BaseModel):
-    id: str = Field(..., description="Mã viết tắt của điểm trường (Ví dụ: mitsuba)")
+    code: str = Field(..., description="Mã viết tắt của điểm trường (Ví dụ: mitsuba)")
     name: str = Field(..., description="Tên đầy đủ của trường mầm non")
     bg_color: str = Field("bg-sky-50", description="Màu nền Tailwind đại diện")
     text_color: str = Field("text-sky-850", description="Màu chữ Tailwind đại diện")
@@ -81,24 +83,106 @@ class SchoolSchema(BaseModel):
 
 
 class ProductSchema(BaseModel):
-    code: str = Field(
-        ..., description="Mã viết tắt viết thường của sản phẩm (Ví dụ: cl, tv)"
-    )
+    code: str = Field(..., description="Mã viết tắt viết thường của sản phẩm (Ví dụ: cl, tv)")
     name: str = Field(..., description="Tên thực phẩm quy chuẩn")
     unit: str = Field(..., description="Đơn vị tính (Kg, Bó, Gói...)")
     price: float = Field(..., description="Đơn giá gốc cung cấp")
 
 
 class StockSchema(BaseModel):
-    product_code: str = Field(..., description="Mã thực phẩm cần điều chỉnh")
+    product_id: Optional[UUID] = Field(None, description="UUID của thực phẩm cần điều chỉnh")
+    product_code: Optional[str] = Field(
+        default=None, description="Mã thực phẩm để tương thích ngược"
+    )
     qty: float = Field(..., description="Số lượng tồn kho khả dụng hiện tại")
 
 
 class OrderUpsertSchema(BaseModel):
-    delivery_date: str = Field(..., description="Ngày giao nhận hàng (YYYY-MM-DD)")
-    product_code: str = Field(..., description="Mã mặt hàng phân bổ")
-    school_id: str = Field(..., description="ID trường nhận hàng")
+    delivery_date: date = Field(..., description="Ngày giao nhận hàng (YYYY-MM-DD)")
+    product_id: Optional[UUID] = Field(None, description="UUID mặt hàng phân bổ")
+    school_id: Optional[UUID] = Field(None, description="UUID trường nhận hàng")
+    product_code: Optional[str] = Field(
+        default=None, description="Mã sản phẩm để tương thích ngược"
+    )
+    school_code: Optional[str] = Field(
+        default=None, description="Mã trường để tương thích ngược"
+    )
     qty: float = Field(..., description="Số lượng thực tế phân phối")
+
+
+class SchoolRecord(SchoolSchema):
+    id: UUID
+    created_at: datetime
+
+
+class ProductRecord(ProductSchema):
+    id: UUID
+    created_at: datetime
+
+
+class StockRecord(BaseModel):
+    id: UUID
+    product_id: UUID
+    qty: float
+    updated_at: datetime
+
+
+class DailyOrderRecord(BaseModel):
+    id: UUID
+    delivery_date: date
+    product_id: UUID
+    school_id: UUID
+    qty: float
+    created_at: datetime
+
+
+def _code(value: str) -> str:
+    return value.strip().lower()
+
+
+def _school_select() -> str:
+    return "id,code,name,bg_color,text_color,border_color,icon,created_at"
+
+
+def _product_select() -> str:
+    return "id,code,name,unit,price,created_at"
+
+
+def _stock_select() -> str:
+    return "id,product_id,qty,updated_at"
+
+
+def _order_select() -> str:
+    return "id,delivery_date,product_id,school_id,qty,created_at"
+
+
+def _school_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
+    data = dict(payload)
+    code = data.pop("code", data.pop("id", ""))
+    data["code"] = _code(str(code))
+    return data
+
+
+def _is_uuid(value: str) -> bool:
+    try:
+        UUID(str(value))
+        return True
+    except Exception:
+        return False
+
+
+def _lookup_id_by_code(table: str, code_field: str, code: str) -> Optional[str]:
+    response = (
+        require_read_client()
+        .table(table)
+        .select("id")
+        .eq(code_field, _code(code))
+        .limit(1)
+        .execute()
+    )
+    if response.data:
+        return str(response.data[0]["id"])
+    return None
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -119,10 +203,10 @@ async def serve_frontend():
     """
 
 
-@app.get("/api/schools", response_model=List[Dict[str, Any]])
+@app.get("/api/schools", response_model=List[SchoolRecord])
 async def get_schools():
     try:
-        response = require_read_client().table("schools").select("*").order("created_at").execute()
+        response = require_read_client().table("schools").select(_school_select()).order("created_at").execute()
         return response.data
     except Exception as exc:
         raise HTTPException(
@@ -134,10 +218,11 @@ async def get_schools():
 @app.post("/api/schools", status_code=status.HTTP_201_CREATED)
 async def create_school(school: SchoolSchema):
     try:
+        data = _school_payload(school.model_dump())
         response = (
             require_write_client()
             .table("schools")
-            .upsert(school.model_dump(), on_conflict="id")
+            .upsert(data, on_conflict="code")
             .execute()
         )
         if not response.data:
@@ -157,7 +242,12 @@ async def create_school(school: SchoolSchema):
 @app.delete("/api/schools/{school_id}")
 async def delete_school(school_id: str):
     try:
-        require_write_client().table("schools").delete().eq("id", school_id).execute()
+        query = require_write_client().table("schools").delete()
+        if _is_uuid(school_id):
+            query.eq("id", school_id)
+        else:
+            query.eq("code", _code(school_id))
+        query.execute()
         return {"status": "success", "message": f"Đã xóa thành công điểm trường {school_id}"}
     except Exception as exc:
         raise HTTPException(
@@ -166,10 +256,10 @@ async def delete_school(school_id: str):
         )
 
 
-@app.get("/api/products", response_model=List[Dict[str, Any]])
+@app.get("/api/products", response_model=List[ProductRecord])
 async def get_products():
     try:
-        response = require_read_client().table("products").select("*").order("code").execute()
+        response = require_read_client().table("products").select(_product_select()).order("code").execute()
         return response.data
     except Exception as exc:
         raise HTTPException(
@@ -182,7 +272,7 @@ async def get_products():
 async def create_product(product: ProductSchema):
     try:
         data = product.model_dump()
-        data["code"] = data["code"].strip().lower()
+        data["code"] = _code(data["code"])
         response = (
             require_write_client().table("products").upsert(data, on_conflict="code").execute()
         )
@@ -197,7 +287,12 @@ async def create_product(product: ProductSchema):
 @app.delete("/api/products/{code}")
 async def delete_product(code: str):
     try:
-        require_write_client().table("products").delete().eq("code", code.lower()).execute()
+        query = require_write_client().table("products").delete()
+        if _is_uuid(code):
+            query.eq("id", code)
+        else:
+            query.eq("code", _code(code))
+        query.execute()
         return {
             "status": "success",
             "message": f"Đã xóa thực phẩm mã {code} khỏi hệ thống",
@@ -212,8 +307,8 @@ async def delete_product(code: str):
 @app.get("/api/stock")
 async def get_stock():
     try:
-        response = require_read_client().table("stock").select("*").execute()
-        return {item["product_code"]: item["qty"] for item in response.data}
+        response = require_read_client().table("stock").select(_stock_select()).execute()
+        return {item["product_id"]: item["qty"] for item in response.data}
     except Exception as exc:
         raise HTTPException(
             status_code=500,
@@ -225,10 +320,15 @@ async def get_stock():
 async def upsert_stock(stock_item: StockSchema):
     try:
         data = stock_item.model_dump()
-        data["product_code"] = data["product_code"].strip().lower()
+        if not data.get("product_id") and data.get("product_code"):
+            resolved = _lookup_id_by_code("products", "code", data["product_code"])
+            data["product_id"] = resolved or data.pop("product_code")
+        data.pop("product_code", None)
+        if not data.get("product_id"):
+            raise HTTPException(status_code=400, detail="Thiếu product_id cho tồn kho.")
         response = (
             require_write_client().table("stock")
-            .upsert(data, on_conflict="product_code")
+            .upsert(data, on_conflict="product_id")
             .execute()
         )
         return {"status": "success", "data": response.data[0]}
@@ -239,12 +339,12 @@ async def upsert_stock(stock_item: StockSchema):
         )
 
 
-@app.get("/api/orders")
-async def get_daily_orders(date: str):
+@app.get("/api/orders", response_model=List[DailyOrderRecord])
+async def get_daily_orders(date: date):
     try:
         response = (
             require_read_client().table("daily_orders")
-            .select("*")
+            .select(_order_select())
             .eq("delivery_date", date)
             .execute()
         )
@@ -260,14 +360,23 @@ async def get_daily_orders(date: str):
 async def upsert_daily_order(order_item: OrderUpsertSchema):
     try:
         data = order_item.model_dump()
-        data["product_code"] = data["product_code"].strip().lower()
+        if not data.get("product_id") and data.get("product_code"):
+            resolved = _lookup_id_by_code("products", "code", data["product_code"])
+            data["product_id"] = resolved or data.pop("product_code")
+        if not data.get("school_id") and data.get("school_code"):
+            resolved = _lookup_id_by_code("schools", "code", data["school_code"])
+            data["school_id"] = resolved or data.pop("school_code")
+        data.pop("product_code", None)
+        data.pop("school_code", None)
+        if not data.get("product_id") or not data.get("school_id"):
+            raise HTTPException(status_code=400, detail="Thiếu product_id hoặc school_id cho daily_orders.")
 
         if data["qty"] <= 0:
             (
                 require_write_client().table("daily_orders")
                 .delete()
                 .eq("delivery_date", data["delivery_date"])
-                .eq("product_code", data["product_code"])
+                .eq("product_id", str(data["product_id"]))
                 .eq("school_id", data["school_id"])
                 .execute()
             )
@@ -277,7 +386,7 @@ async def upsert_daily_order(order_item: OrderUpsertSchema):
             require_write_client().table("daily_orders")
             .upsert(
                 data,
-                on_conflict="delivery_date,product_code,school_id",
+                on_conflict="delivery_date,product_id,school_id",
             )
             .execute()
         )
@@ -290,7 +399,7 @@ async def upsert_daily_order(order_item: OrderUpsertSchema):
 
 
 @app.delete("/api/orders")
-async def clear_daily_orders(date: str):
+async def clear_daily_orders(date: date):
     try:
         require_write_client().table("daily_orders").delete().eq("delivery_date", date).execute()
         return {"status": "success", "message": f"Đã xóa sạch dữ liệu ngày {date}"}
