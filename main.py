@@ -360,6 +360,7 @@ async def get_daily_orders(date: date):
 async def upsert_daily_order(order_item: OrderUpsertSchema):
     try:
         data = order_item.model_dump()
+        data["delivery_date"] = data["delivery_date"].isoformat()
         if not data.get("product_id") and data.get("product_code"):
             resolved = _lookup_id_by_code("products", "code", data["product_code"])
             data["product_id"] = resolved or data.pop("product_code")
@@ -401,7 +402,7 @@ async def upsert_daily_order(order_item: OrderUpsertSchema):
 @app.delete("/api/orders")
 async def clear_daily_orders(date: date):
     try:
-        require_write_client().table("daily_orders").delete().eq("delivery_date", date).execute()
+        require_write_client().table("daily_orders").delete().eq("delivery_date", date.isoformat()).execute()
         return {"status": "success", "message": f"Đã xóa sạch dữ liệu ngày {date}"}
     except Exception as exc:
         raise HTTPException(
