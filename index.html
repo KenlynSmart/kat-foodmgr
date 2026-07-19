@@ -91,7 +91,12 @@
                   <th class="th w-20 text-center">ĐVT</th>
                   <th class="th w-28 text-right">Giá</th>
                   <th v-for="school in schools" :key="school.id" class="th text-center w-28 border-l">
-                    {{ school.code || school.id }}
+                    <div class="flex flex-col items-center gap-1">
+                      <span>{{ school.code || school.id }}</span>
+                      <button @click="openSingleSchoolImportModal(school.id)" class="rounded-lg border border-emerald-200 bg-white px-2 py-1 text-[11px] text-emerald-700 hover:bg-emerald-50" :title="`Nhập đơn ${school.name}`">
+                        <i class="fa-solid fa-file-import"></i> Nhập
+                      </button>
+                    </div>
                   </th>
                   <th class="th w-28 text-center">Tổng nhu cầu</th>
                   <th class="th w-32 text-right">Thành tiền</th>
@@ -143,6 +148,9 @@
               <i class="fa-solid text-2xl" :class="school.icon || 'fa-school'"></i>
             </div>
             <div class="mt-3 text-2xl font-extrabold">{{ money(totalBySchool[school.id] || 0) }}</div>
+            <button @click="openSingleSchoolImportModal(school.id)" class="mt-3 w-full rounded-xl border border-current/20 bg-white/60 px-3 py-2 text-sm font-semibold hover:bg-white">
+              <i class="fa-solid fa-file-import mr-1"></i> Nhập đơn trường này
+            </button>
           </div>
         </div>
 
@@ -152,9 +160,14 @@
               <h2 class="section-title">Nhập đơn hàng từ Excel</h2>
               <p class="section-subtitle">Cột A-D là mã, tên, ĐVT, đơn giá; các cột sau là tên hoặc mã trường.</p>
             </div>
-            <label for="excel-upload-input" class="btn-primary cursor-pointer">
-              <i class="fa-solid fa-file-excel mr-2"></i>Tải tệp Excel đơn hàng (.xlsx)
-            </label>
+            <div class="flex flex-wrap gap-2">
+              <label for="excel-upload-input" class="btn-primary cursor-pointer">
+                <i class="fa-solid fa-file-excel mr-2"></i>Tải tệp Excel đơn hàng (.xlsx)
+              </label>
+              <button @click="openSingleSchoolImportModal('')" class="btn-secondary">
+                <i class="fa-solid fa-school mr-1"></i>Nhập trường chưa có
+              </button>
+            </div>
             <input ref="excelFileInput" id="excel-upload-input" type="file" accept=".xlsx,.xls" @change="handleExcelUpload" class="hidden">
           </div>
           <div v-if="importSummary" class="grid sm:grid-cols-2 lg:grid-cols-4 gap-3">
@@ -428,10 +441,10 @@
       <div class="w-full max-w-5xl rounded-2xl bg-white p-6 shadow-2xl space-y-4 max-h-[90vh] overflow-auto">
         <div class="flex items-center justify-between gap-3">
           <div>
-            <h3 class="text-lg font-bold text-emerald-700">Phát Hiện Mặt Hàng Mới - Vui Lòng Kiểm Duyệt</h3>
-            <p class="text-sm text-slate-500">Kiểm tra và chỉnh sửa thông tin trước khi thêm vào danh mục.</p>
+            <h3 class="text-lg font-bold text-emerald-700">Bảng Kiểm Duyệt Bản Ghi Hệ Thống Mới</h3>
+            <p class="text-sm text-slate-500">Kiểm tra sản phẩm và điểm trường mới trước khi đăng ký, sau đó nhập đơn vào ma trận.</p>
           </div>
-          <button @click="resetExcelImport" class="btn-secondary">Hủy bỏ Import</button>
+          <button @click="resetExcelImport(); closeSingleSchoolImportModal()" class="btn-secondary">Hủy bỏ Import</button>
         </div>
         <div class="overflow-x-auto">
           <table class="min-w-full text-sm">
@@ -448,9 +461,57 @@
             </tbody>
           </table>
         </div>
+        <div v-if="quarantinedNewSchools.length" class="space-y-3">
+          <h4 class="font-bold text-slate-900">Cấu hình Điểm Trường Mới</h4>
+          <div class="overflow-x-auto">
+            <table class="min-w-full text-sm">
+              <thead class="thead">
+                <tr><th class="th">Mã trường</th><th class="th">Tên trường</th><th class="th">Màu giao diện</th></tr>
+              </thead>
+              <tbody class="divide-y divide-slate-100">
+                <tr v-for="school in quarantinedNewSchools" :key="school.ref">
+                  <td class="px-3 py-2"><input v-model="school.code" class="input"></td>
+                  <td class="px-3 py-2"><input v-model="school.name" class="input"></td>
+                  <td class="px-3 py-2">
+                    <select v-model="school.theme" @change="applySchoolThemeToReview(school)" class="input">
+                      <option v-for="theme in themes" :key="theme.bg_color" :value="theme.bg_color">{{ theme.label }}</option>
+                    </select>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
         <div class="flex justify-end gap-2">
-          <button @click="resetExcelImport" class="btn-secondary">Hủy bỏ Import</button>
+          <button @click="resetExcelImport(); closeSingleSchoolImportModal()" class="btn-secondary">Hủy bỏ Import</button>
           <button @click="approveNewProductsImport" class="btn-primary">Xác Nhận Thêm Toàn Bộ</button>
+        </div>
+      </div>
+    </div>
+
+    <div v-if="singleSchoolImportModal" class="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/70 p-4 no-print">
+      <div class="w-full max-w-2xl rounded-2xl bg-white p-6 shadow-2xl space-y-4">
+        <div class="flex items-start justify-between gap-3">
+          <div>
+            <h3 class="text-lg font-bold text-emerald-700">Nhập đơn theo trường</h3>
+            <p class="text-sm text-slate-500">Đích nhập: <strong>{{ schools.find(school => school.id === singleSchoolImportSchoolId || school.code === singleSchoolImportSchoolId)?.name || singleSchoolImportSchoolId }}</strong></p>
+          </div>
+          <button @click="closeSingleSchoolImportModal" class="btn-secondary">Đóng</button>
+        </div>
+        <div class="flex gap-2 border-b border-slate-200">
+          <button @click="singleSchoolImportTab = 'file'" class="px-3 py-2 text-sm font-semibold" :class="singleSchoolImportTab === 'file' ? 'border-b-2 border-emerald-600 text-emerald-700' : 'text-slate-500'">Tải Excel</button>
+          <button @click="singleSchoolImportTab = 'text'" class="px-3 py-2 text-sm font-semibold" :class="singleSchoolImportTab === 'text' ? 'border-b-2 border-emerald-600 text-emerald-700' : 'text-slate-500'">Dán văn bản</button>
+        </div>
+        <div v-if="singleSchoolImportTab === 'file'" class="rounded-2xl border-2 border-dashed border-emerald-200 bg-emerald-50/40 p-8 text-center">
+          <i class="fa-solid fa-file-excel text-3xl text-emerald-600"></i>
+          <p class="mt-2 text-sm text-slate-600">Chọn Excel có các cột Mã hàng, Tên hàng, ĐVT, Đơn giá, Số lượng.</p>
+          <label for="single-school-excel-input" class="btn-primary mt-4 inline-block cursor-pointer">Chọn tệp .xlsx / .xls</label>
+          <input ref="singleSchoolImportFileInput" id="single-school-excel-input" type="file" accept=".xlsx,.xls" @change="handleSingleSchoolExcelUpload" class="hidden">
+        </div>
+        <div v-else class="space-y-3">
+          <label class="text-sm font-semibold text-slate-700">Dán văn bản đơn hàng (Zalo / SMS)</label>
+          <textarea v-model="singleSchoolImportText" rows="10" class="textarea" placeholder="tv 10&#10;cl: 5"></textarea>
+          <button @click="submitSingleSchoolTextImport" class="btn-primary">Phân tích và nhập</button>
         </div>
       </div>
     </div>
