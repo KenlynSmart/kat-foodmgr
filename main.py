@@ -319,7 +319,7 @@ async def get_stock():
 @app.post("/api/stock/upsert")
 async def upsert_stock(stock_item: StockSchema):
     try:
-        data = stock_item.model_dump()
+        data = stock_item.model_dump(mode="json")
         if not data.get("product_id") and data.get("product_code"):
             resolved = _lookup_id_by_code("products", "code", data["product_code"])
             data["product_id"] = resolved or data.pop("product_code")
@@ -359,8 +359,7 @@ async def get_daily_orders(date: date):
 @app.post("/api/orders/upsert")
 async def upsert_daily_order(order_item: OrderUpsertSchema):
     try:
-        data = order_item.model_dump()
-        data["delivery_date"] = data["delivery_date"].isoformat()
+        data = order_item.model_dump(mode="json")
         if not data.get("product_id") and data.get("product_code"):
             resolved = _lookup_id_by_code("products", "code", data["product_code"])
             data["product_id"] = resolved or data.pop("product_code")
