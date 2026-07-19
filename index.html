@@ -64,7 +64,7 @@
           </div>
           <div class="flex flex-wrap items-center gap-3">
             <label class="text-sm font-semibold text-slate-600">Ngày giao</label>
-            <input type="date" v-model="deliveryDate" class="input">
+            <input type="date" v-model="deliveryDate" @change="changeDeliveryDate" class="input">
             <button @click="addRow" class="btn-primary">Thêm dòng</button>
             <button @click="clearRows" class="btn-danger">Xoá ngày này</button>
           </div>
@@ -284,10 +284,16 @@
                 <tr v-for="product in filteredStockProducts" :key="product.id || product.code">
                   <td class="px-3 py-2">{{ product.code }} · {{ product.name }}</td>
                   <td class="px-3 py-2 text-right w-48">
-                    <input v-model.number="stockMap[product.id || product.code]" type="number" step="any" min="0" @focus="setActiveEditingCell(`stock:${product.id || product.code}`, 'qty')" @blur="clearActiveEditingCell(); scheduleSync()" @change="scheduleSync" class="input w-32 text-right">
+                    <div class="flex items-center justify-end gap-1">
+                      <button @click="adjustStock(product, -1)" class="rounded-lg border border-slate-200 px-2 py-1 font-bold text-slate-600 hover:bg-slate-100">-1</button>
+                      <button @click="adjustStock(product, -0.1)" class="rounded-lg border border-slate-200 px-2 py-1 font-bold text-slate-600 hover:bg-slate-100">-0.1</button>
+                      <input v-model.number="stockMap[product.id]" type="number" step="any" min="0" @focus="setActiveEditingCell(`stock:${product.id}`, 'qty')" @blur="clearActiveEditingCell(); scheduleSync()" @change="scheduleSync" class="input w-24 text-right">
+                      <button @click="adjustStock(product, 0.1)" class="rounded-lg border border-slate-200 px-2 py-1 font-bold text-slate-600 hover:bg-slate-100">+0.1</button>
+                      <button @click="adjustStock(product, 1)" class="rounded-lg border border-slate-200 px-2 py-1 font-bold text-slate-600 hover:bg-slate-100">+1</button>
+                    </div>
                   </td>
                   <td class="px-3 py-2 text-right">
-                    <button @click="stockForm = { product_code: product.code, qty: stockMap[product.id || product.code] || 0 }" class="text-emerald-700">Chọn</button>
+                    <button @click="stockForm = { product_code: product.code, qty: stockMap[product.id] || 0 }" class="text-emerald-700">Chọn</button>
                   </td>
                 </tr>
               </tbody>
