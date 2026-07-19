@@ -5,6 +5,7 @@ from typing import Any, Dict, List, Optional
 from uuid import UUID
 
 from fastapi import FastAPI, HTTPException, status
+from fastapi.encoders import jsonable_encoder
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import BaseModel, Field
@@ -87,6 +88,11 @@ class ProductSchema(BaseModel):
     name: str = Field(..., description="Tên thực phẩm quy chuẩn")
     unit: str = Field(..., description="Đơn vị tính (Kg, Bó, Gói...)")
     price: float = Field(..., description="Đơn giá gốc cung cấp")
+    category_id: Optional[UUID] = Field(None, description="UUID nhóm hàng")
+
+
+class CategorySchema(BaseModel):
+    name: str = Field(..., min_length=1, description="Tên nhóm hàng")
 
 
 class StockSchema(BaseModel):
@@ -120,6 +126,11 @@ class ProductRecord(ProductSchema):
     created_at: datetime
 
 
+class CategoryRecord(CategorySchema):
+    id: UUID
+    created_at: datetime
+
+
 class StockRecord(BaseModel):
     id: UUID
     product_id: UUID
@@ -145,7 +156,7 @@ def _school_select() -> str:
 
 
 def _product_select() -> str:
-    return "id,code,name,unit,price,created_at"
+    return "id,code,name,unit,price,category_id,created_at"
 
 
 def _stock_select() -> str:
@@ -284,10 +295,91 @@ async def get_products():
         )
 
 
+@app.get("/api/categories", response_model=List[CategoryRecord])
+async def get_categories():
+    try:
+        response = (
+            require_read_client()
+            .table("categories")
+            .select("id,name,created_at")
+            .order("created_at")
+            .execute()
+        )
+        return response.data
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Lỗi truy vấn nhóm hàng: {exc}",
+        )
+
+
+@app.post("/api/categories", response_model=CategoryRecord, status_code=status.HTTP_201_CREATED)
+async def create_category(category: CategorySchema):
+    try:
+        payload = jsonable_encoder(category)
+        payload["name"] = payload["name"].strip()
+        if not payload["name"]:
+            raise HTTPException(status_code=422, detail="Tên nhóm hàng không được để trống.")
+        response = (
+            require_write_client()
+            .table("categories")
+            .upsert(payload, on_conflict="name")
+            .execute()
+        )
+        if not response.data:
+            raise HTTPException(status_code=400, detail="Thao tác lưu nhóm hàng thất bại.")
+        return response.data[0]
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Lỗi thêm nhóm hàng: {exc}",
+        )
+
+
+@app.put("/api/categories/{category_id}", response_model=CategoryRecord)
+async def update_category(category_id: UUID, category: CategorySchema):
+    try:
+        payload = jsonable_encoder(category)
+        payload["name"] = payload["name"].strip()
+        if not payload["name"]:
+            raise HTTPException(status_code=422, detail="Tên nhóm hàng không được để trống.")
+        response = (
+            require_write_client()
+            .table("categories")
+            .update(payload)
+            .eq("id", str(category_id))
+            .execute()
+        )
+        if not response.data:
+            raise HTTPException(status_code=404, detail="Không tìm thấy nhóm hàng.")
+        return response.data[0]
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Lỗi cập nhật nhóm hàng: {exc}",
+        )
+
+
+@app.delete("/api/categories/{category_id}")
+async def delete_category(category_id: UUID):
+    try:
+        require_write_client().table("categories").delete().eq("id", str(category_id)).execute()
+        return {"status": "success", "message": f"Đã xóa nhóm hàng {category_id}"}
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Lỗi xóa nhóm hàng: {exc}",
+        )
+
+
 @app.post("/api/products", status_code=status.HTTP_201_CREATED)
 async def create_product(product: ProductSchema):
     try:
-        data = product.model_dump()
+        data = jsonable_encoder(product)
         data["code"] = _code(data["code"])
         response = (
             require_write_client().table("products").upsert(data, on_conflict="code").execute()

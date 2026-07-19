@@ -70,6 +70,7 @@ createApp({
       rows: [emptyRow()],
       schools: clone(defaultSchools),
       products: clone(defaultProducts),
+      categories: [],
       stockMap: clone(defaultStock),
       deliveryDate: today
     };
@@ -89,6 +90,7 @@ createApp({
     const rows = ref(state.rows);
     const schools = ref(state.schools);
     const products = ref(state.products);
+    const categories = ref(state.categories || []);
     const stockMap = ref(state.stockMap);
     const deliveryDate = ref(state.deliveryDate);
     const parserText = ref('');
@@ -106,7 +108,14 @@ createApp({
     const printSchoolId = ref('all');
     const editingProduct = ref(false);
     const editingSchool = ref(false);
-    const productForm = ref({ code: '', name: '', unit: '', price: 0 });
+    const productForm = ref({ code: '', name: '', unit: '', price: 0, category_id: '' });
+    const categoryForm = ref({ name: '' });
+    const editingCategoryId = ref('');
+    const categoryDraftName = ref('');
+    const categoryFilter = ref('');
+    const showCategoryDeleteModal = ref(false);
+    const categoryToDelete = ref(null);
+    const categoryDeleteConfirmText = ref('');
     const schoolForm = ref({ id: '', name: '', bg_color: 'bg-sky-50', text_color: 'text-sky-800', border_color: 'border-sky-200', icon: 'fa-school', theme: 'bg-sky-50' });
     const stockForm = ref({ product_code: '', qty: 0 });
     const activeEditingCell = ref(null);
@@ -124,6 +133,11 @@ createApp({
     const singleSchoolImportSchoolId = ref('');
     const singleSchoolImportText = ref('');
     const singleSchoolImportFileInput = ref(null);
+    const catalogFileInput = ref(null);
+    const showCatalogReviewModal = ref(false);
+    const catalogReviewItems = ref([]);
+    const catalogReviewCategories = ref([]);
+    const catalogImportSummary = ref(null);
 
     let syncing = false;
     let applyingRemote = false;
@@ -437,8 +451,21 @@ createApp({
 
     const filteredProducts = computed(() => {
       const q = norm(productFilter.value);
-      return !q ? products.value : products.value.filter((item) => norm(item.code).includes(q) || norm(item.name).includes(q));
+      return (!q ? products.value : products.value.filter((item) => norm(item.code).includes(q) || norm(item.name).includes(q)))
+        .slice()
+        .sort((a, b) => {
+          const categoryA = categories.value.find((category) => category.id === a.category_id)?.name || '';
+          const categoryB = categories.value.find((category) => category.id === b.category_id)?.name || '';
+          return norm(categoryA).localeCompare(norm(categoryB)) || norm(a.code).localeCompare(norm(b.code));
+        });
     });
+
+    const filteredCategories = computed(() => {
+      const q = norm(categoryFilter.value);
+      return !q ? categories.value : categories.value.filter((category) => norm(category.name).includes(q));
+    });
+
+    const categoryName = (categoryId) => categories.value.find((category) => String(category.id) === String(categoryId))?.name || 'Chưa phân nhóm';
 
     const filteredSchools = computed(() => {
       const q = norm(schoolFilter.value);
@@ -471,6 +498,7 @@ createApp({
         localStorage.setItem(STORAGE_KEY, JSON.stringify({
           schools: schools.value,
           products: products.value,
+          categories: categories.value,
           stockMap: stockMap.value,
           rows: rows.value,
           deliveryDate: deliveryDate.value
@@ -496,6 +524,7 @@ createApp({
         const parsed = JSON.parse(raw);
         if (Array.isArray(parsed.schools) && parsed.schools.length) schools.value = parsed.schools;
         if (Array.isArray(parsed.products) && parsed.products.length) products.value = parsed.products;
+        if (Array.isArray(parsed.categories)) categories.value = parsed.categories;
         if (parsed.stockMap && typeof parsed.stockMap === 'object') stockMap.value = normalizeStockMap(parsed.stockMap);
         if (Array.isArray(parsed.rows) && parsed.rows.length) rows.value = parsed.rows;
         if (parsed.deliveryDate) deliveryDate.value = parsed.deliveryDate;
@@ -539,6 +568,10 @@ createApp({
       return apiJson('/api/products');
     }
 
+    async function fetchCategories() {
+      return apiJson('/api/categories');
+    }
+
     async function fetchStock() {
       return apiJson('/api/stock');
     }
@@ -557,6 +590,18 @@ createApp({
 
     async function saveProductApi(payload) {
       return apiJson('/api/products', { method: 'POST', body: JSON.stringify(payload) });
+    }
+
+    async function saveCategoryApi(payload) {
+      return apiJson('/api/categories', { method: 'POST', body: JSON.stringify(payload) });
+    }
+
+    async function updateCategoryApi(id, payload) {
+      return apiJson(`/api/categories/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(payload) });
+    }
+
+    async function deleteCategoryApi(id) {
+      return apiJson(`/api/categories/${encodeURIComponent(id)}`, { method: 'DELETE' });
     }
 
     async function deleteProductApi(code) {
@@ -636,9 +681,10 @@ createApp({
     async function pullApiState() {
       try {
         setStatus('Đang đồng bộ', 'API', 'Đang lấy dữ liệu mới từ backend.');
-        const [schoolRows, productRows, stockRows, orderRows] = await Promise.all([
+        const [schoolRows, productRows, categoryRows, stockRows, orderRows] = await Promise.all([
           fetchSchools(),
           fetchProducts(),
+          fetchCategories(),
           fetchStock(),
           fetchOrders(deliveryDate.value)
         ]);
@@ -693,6 +739,7 @@ createApp({
           byId.forEach((product) => nextProducts.push(product));
           products.value = nextProducts;
         }
+        if (Array.isArray(categoryRows)) categories.value = categoryRows;
         if (stockRows && typeof stockRows === 'object') stockMap.value = normalizeStockMap(stockRows);
         if (Array.isArray(orderRows)) applyOrderRows(orderRows);
         applyingRemote = false;
@@ -719,19 +766,31 @@ createApp({
         border_color: school.border_color,
         icon: school.icon
       }));
-      const productTasks = products.value.map((product) => saveProductApi({
-        code: product.code,
-        name: product.name,
-        unit: product.unit,
-        price: num(product.price)
-      }));
       const stockTasks = Object.entries(stockMap.value).map(([product_id, qtyValue]) => saveStockApi({
         product_id,
         qty: num(qtyValue)
       }));
       const orderTasks = rows.value.flatMap((row) => rowToOrderRecords(row).map((order) => upsertOrderApi(order)));
 
-      await Promise.all([...schoolTasks, ...productTasks, ...stockTasks]);
+      await Promise.all([...schoolTasks, ...stockTasks]);
+      for (const category of categories.value.filter((item) => item.name?.trim())) {
+        const response = await saveCategoryApi({ name: category.name.trim() });
+        const saved = response?.data || response;
+        if (saved?.id && String(saved.id) !== String(category.id)) {
+          products.value.forEach((product) => {
+            if (String(product.category_id) === String(category.id)) product.category_id = saved.id;
+          });
+          category.id = saved.id;
+        }
+      }
+      const productTasks = products.value.map((product) => saveProductApi({
+        code: product.code,
+        name: product.name,
+        unit: product.unit,
+        price: num(product.price),
+        category_id: product.category_id || null
+      }));
+      await Promise.all(productTasks);
       await clearOrdersApi(deliveryDate.value);
       await Promise.all(orderTasks);
     }
@@ -786,6 +845,7 @@ createApp({
         name: productForm.value.name.trim(),
         unit: productForm.value.unit.trim() || '-',
         price: num(productForm.value.price),
+        category_id: productForm.value.category_id || null,
         created_at: today
       };
       const index = products.value.findIndex((product) => norm(product.code) === code || norm(product.id) === code);
@@ -805,7 +865,82 @@ createApp({
 
     function resetProductForm() {
       editingProduct.value = false;
-      productForm.value = { code: '', name: '', unit: '', price: 0 };
+      productForm.value = { code: '', name: '', unit: '', price: 0, category_id: '' };
+    }
+
+    async function saveCategory() {
+      const name = categoryForm.value.name.trim();
+      if (!name) return;
+      try {
+        const response = await saveCategoryApi({ name });
+        const category = response?.data || response;
+        const existingIndex = categories.value.findIndex((item) => String(item.id) === String(category.id) || norm(item.name) === norm(name));
+        if (existingIndex >= 0) categories.value[existingIndex] = { ...categories.value[existingIndex], ...category, name };
+        else categories.value.push({ ...category, id: category.id || crypto.randomUUID(), name, created_at: today });
+        categoryForm.value = { name: '' };
+        scheduleSync();
+      } catch (error) {
+        logError('saveCategory', error);
+        addToast(`Không thể lưu nhóm hàng: ${error.message}`, 'error');
+      }
+    }
+
+    function editCategory(category) {
+      editingCategoryId.value = category.id;
+      categoryDraftName.value = category.name;
+    }
+
+    async function updateCategory(category) {
+      const name = categoryDraftName.value.trim();
+      if (!name) return;
+      try {
+        const response = await updateCategoryApi(category.id, { name });
+        const updated = response?.data || response;
+        const nextName = updated?.name || name;
+        const index = categories.value.findIndex((item) => String(item.id) === String(category.id));
+        if (index >= 0) categories.value[index] = { ...categories.value[index], ...updated, name: nextName };
+        editingCategoryId.value = '';
+        categoryDraftName.value = '';
+        scheduleSync();
+      } catch (error) {
+        logError('updateCategory', error);
+        addToast(`Không thể cập nhật nhóm hàng: ${error.message}`, 'error');
+      }
+    }
+
+    function cancelCategoryEdit() {
+      editingCategoryId.value = '';
+      categoryDraftName.value = '';
+    }
+
+    function promptDeleteCategory(category) {
+      categoryToDelete.value = category;
+      categoryDeleteConfirmText.value = '';
+      showCategoryDeleteModal.value = true;
+    }
+
+    function closeCategoryDeleteModal() {
+      showCategoryDeleteModal.value = false;
+      categoryToDelete.value = null;
+      categoryDeleteConfirmText.value = '';
+    }
+
+    async function confirmDeleteCategory() {
+      if (categoryDeleteConfirmText.value !== 'XAC NHAN XOA NHOM' || !categoryToDelete.value) return;
+      const category = categoryToDelete.value;
+      try {
+        await deleteCategoryApi(category.id);
+        categories.value = categories.value.filter((item) => String(item.id) !== String(category.id));
+        products.value.forEach((product) => {
+          if (String(product.category_id) === String(category.id)) product.category_id = null;
+        });
+        closeCategoryDeleteModal();
+        scheduleSync();
+        addToast(`Đã xóa nhóm ${category.name}`, 'success');
+      } catch (error) {
+        logError('deleteCategory', error);
+        addToast(`Không thể xóa nhóm hàng: ${error.message}`, 'error');
+      }
     }
 
     async function deleteProduct(code) {
@@ -1114,6 +1249,169 @@ createApp({
       school.bg_color = theme.bg_color;
       school.text_color = theme.text_color;
       school.border_color = theme.border_color;
+    }
+
+    function sanitizeCatalogPrice(value) {
+      const raw = String(value ?? '').replace(/[\u0000-\u001f\uE000-\uF8FF]/g, ' ').trim();
+      if (/theo\s*thời\s*giá|market\s*price/i.test(raw)) return { price: 0, isMarketPrice: true };
+      const numeric = raw.match(/[\d.,]+/g)?.join('') || '';
+      if (!numeric) return { price: 0, isMarketPrice: false };
+      let normalized = numeric;
+      if (normalized.includes('.') && normalized.includes(',')) normalized = normalized.replace(/[.,](?=\d{3}(?:\D|$))/g, '');
+      else if (normalized.includes(',') && /,\d{3}$/.test(normalized)) normalized = normalized.replace(/,/g, '');
+      else normalized = normalized.replace(',', '.');
+      return { price: num(normalized), isMarketPrice: false };
+    }
+
+    function isCatalogCategoryLabel(value) {
+      const text = String(value || '').trim();
+      return Boolean(text && (/^(?:\*+\s*)?(?:I{1,3}|IV|V)\b/i.test(text) || /^\*/.test(text)));
+    }
+
+    function catalogColumnIndex(headers, terms, fallback) {
+      const index = headers.findIndex((header) => terms.some((term) => header.includes(term)));
+      return index >= 0 ? index : fallback;
+    }
+
+    function parseCatalogSheet(matrix) {
+      if (!Array.isArray(matrix) || matrix.length < 2) throw new Error('Tệp báo giá không có đủ dữ liệu.');
+      const headers = matrix[0].map((value) => norm(value));
+      const codeIndex = catalogColumnIndex(headers, ['mã hàng', 'mã sản phẩm', 'mã', 'code'], 0);
+      const nameIndex = catalogColumnIndex(headers, ['tên hàng', 'tên sản phẩm', 'tên', 'name'], 1);
+      const unitIndex = catalogColumnIndex(headers, ['đvt', 'đơn vị', 'unit'], 2);
+      const priceIndex = catalogColumnIndex(headers, ['đơn giá', 'giá', 'price'], 3);
+      let currentCategoryName = '';
+      const parsed = [];
+      matrix.slice(1).forEach((row, index) => {
+        const codeRaw = String(row[codeIndex] ?? '').trim();
+        const nameRaw = String(row[nameIndex] ?? '').trim();
+        const unitRaw = String(row[unitIndex] ?? '').trim();
+        const priceRaw = String(row[priceIndex] ?? '').trim();
+        if (!unitRaw && !priceRaw && (isCatalogCategoryLabel(codeRaw) || isCatalogCategoryLabel(nameRaw))) {
+          currentCategoryName = [codeRaw, nameRaw].filter(Boolean).join(' ').replace(/^\*+\s*/, '').trim();
+          return;
+        }
+        if (!unitRaw) return;
+        const priceInfo = sanitizeCatalogPrice(priceRaw);
+        const cleanedCode = norm(codeRaw);
+        const requiresShortcut = !cleanedCode || /^\d+(?:[.,]\d+)?$/.test(cleanedCode);
+        const product = !requiresShortcut ? resolveProduct(cleanedCode) : null;
+        parsed.push({
+          id: `catalog-row-${index}`,
+          originalCode: codeRaw,
+          code: requiresShortcut ? '' : cleanedCode,
+          name: nameRaw,
+          unit: unitRaw,
+          price: priceInfo.price,
+          isMarketPrice: priceInfo.isMarketPrice,
+          categoryName: currentCategoryName || 'Chưa phân nhóm',
+          category_id: product?.category_id || '',
+          existingProductId: product ? productKey(product) : '',
+          requiresShortcut
+        });
+      });
+      if (!parsed.length) throw new Error('Không nhận diện được dòng sản phẩm. Hãy kiểm tra cột ĐVT.');
+      const categoryNames = [...new Set(parsed.map((item) => item.categoryName).filter(Boolean))];
+      return { parsed, categoryNames };
+    }
+
+    async function handleCatalogExcelUpload(event) {
+      const file = event.target.files?.[0];
+      if (!file || !window.XLSX) return;
+      try {
+        const workbook = window.XLSX.read(await file.arrayBuffer(), { type: 'array' });
+        const sheet = workbook.Sheets[workbook.SheetNames[0]];
+        const matrix = window.XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
+        const result = parseCatalogSheet(matrix);
+        catalogReviewItems.value = result.parsed;
+        catalogReviewCategories.value = result.categoryNames.map((name) => ({
+          name,
+          id: categories.value.find((category) => norm(category.name) === norm(name))?.id || '',
+          isNew: !categories.value.some((category) => norm(category.name) === norm(name))
+        }));
+        catalogImportSummary.value = {
+          totalRows: result.parsed.length,
+          totalCategories: result.categoryNames.length,
+          newItems: result.parsed.filter((item) => !item.existingProductId || item.requiresShortcut).length,
+          marketPriceItems: result.parsed.filter((item) => item.isMarketPrice).length
+        };
+        showCatalogReviewModal.value = true;
+      } catch (error) {
+        logError('handleCatalogExcelUpload', error);
+        addToast(`Không thể đọc báo giá: ${error.message}`, 'error');
+      }
+    }
+
+    function resetCatalogImport(keepSummary = false) {
+      showCatalogReviewModal.value = false;
+      catalogReviewItems.value = [];
+      catalogReviewCategories.value = [];
+      if (!keepSummary) catalogImportSummary.value = null;
+      if (catalogFileInput.value) catalogFileInput.value.value = '';
+    }
+
+    async function approveCatalogImport() {
+      try {
+        const categoryIds = new Map();
+        for (const category of catalogReviewCategories.value) {
+          const name = category.name.trim();
+          if (!name) throw new Error('Tên nhóm hàng không được để trống.');
+          const existing = categories.value.find((item) => norm(item.name) === norm(name));
+          if (existing) {
+            categoryIds.set(category.name, existing.id);
+            continue;
+          }
+          const response = await saveCategoryApi({ name });
+          const saved = response?.data || response;
+          const record = { ...saved, id: saved?.id || crypto.randomUUID(), name };
+          categories.value.push(record);
+          categoryIds.set(category.name, record.id);
+        }
+        const seenCodes = new Set(products.value.map((product) => norm(product.code)));
+        let registered = 0;
+        for (const item of catalogReviewItems.value) {
+          const code = norm(item.code);
+          if (!code || !/^[a-z][a-z0-9_-]*$/i.test(code)) throw new Error(`Mã hàng không hợp lệ: ${item.originalCode || '(trống)'}`);
+          if (seenCodes.has(code) && !item.existingProductId) throw new Error(`Mã hàng bị trùng: ${code}`);
+          const categoryId = categoryIds.get(item.categoryName) || null;
+          const response = await saveProductApi({
+            code,
+            name: item.name.trim(),
+            unit: item.unit.trim() || '-',
+            price: num(item.price),
+            category_id: categoryId
+          });
+          const saved = response?.data || response;
+          const product = {
+            ...saved,
+            id: saved?.id || item.existingProductId || crypto.randomUUID(),
+            code,
+            name: item.name.trim(),
+            unit: item.unit.trim() || '-',
+            price: num(item.price),
+            category_id: categoryId,
+            is_market_price: item.isMarketPrice
+          };
+          const index = products.value.findIndex((existing) => norm(existing.code) === code);
+          if (index >= 0) products.value[index] = { ...products.value[index], ...product };
+          else {
+            products.value.unshift(product);
+            registered += 1;
+          }
+          seenCodes.add(code);
+        }
+        catalogImportSummary.value = {
+          ...catalogImportSummary.value,
+          totalCategories: categories.value.length,
+          newItems: registered
+        };
+        resetCatalogImport(true);
+        addToast(`Đã lưu ${registered} mặt hàng và cập nhật nhóm hàng`, 'success');
+        scheduleSync();
+      } catch (error) {
+        logError('approveCatalogImport', error);
+        addToast(`Không thể duyệt báo giá: ${error.message}`, 'error');
+      }
     }
 
     function schoolFromHeader(header) {
@@ -1465,6 +1763,7 @@ createApp({
       rows,
       schools,
       products,
+      categories,
       stockMap,
       parserText,
       parserPreview,
@@ -1479,6 +1778,12 @@ createApp({
       debugLogs,
       printSchoolId,
       productForm,
+      categoryForm,
+      categoryFilter,
+      filteredCategories,
+      categoryName,
+      editingCategoryId,
+      categoryDraftName,
       schoolForm,
       stockForm,
       editingProduct,
@@ -1516,6 +1821,13 @@ createApp({
       saveProduct,
       editProduct,
       resetProductForm,
+      saveCategory,
+      editCategory,
+      updateCategory,
+      cancelCategoryEdit,
+      promptDeleteCategory,
+      closeCategoryDeleteModal,
+      confirmDeleteCategory,
       deleteProduct,
       saveSchool,
       editSchool,
@@ -1540,6 +1852,9 @@ createApp({
       num,
       isSyncingManual,
       manuallySyncAllData,
+      showCategoryDeleteModal,
+      categoryToDelete,
+      categoryDeleteConfirmText,
       excelFileInput,
       handleExcelUpload,
       quarantinedNewProducts,
@@ -1558,7 +1873,15 @@ createApp({
       singleSchoolImportFileInput,
       handleSingleSchoolExcelUpload,
       submitSingleSchoolTextImport,
-      applySchoolThemeToReview
+      applySchoolThemeToReview,
+      catalogFileInput,
+      showCatalogReviewModal,
+      catalogReviewItems,
+      catalogReviewCategories,
+      catalogImportSummary,
+      handleCatalogExcelUpload,
+      resetCatalogImport,
+      approveCatalogImport
     };
   }
 }).mount('#app');
