@@ -78,6 +78,12 @@ createApp({
     const productKey = (product) => String(product?.id || product?.code || '');
     const resolveSchool = (value) => schools.value.find((school) => schoolKey(school) === String(value) || norm(school.code) === norm(value) || norm(school.id) === norm(value));
     const resolveProduct = (value) => products.value.find((product) => productKey(product) === String(value) || norm(product.code) === norm(value) || norm(product.id) === norm(value));
+    const normalizeStockMap = (input) => Object.entries(input || {}).reduce((result, [key, value]) => {
+      const product = resolveProduct(key);
+      result[product?.id || key] = num(value);
+      return result;
+    }, {});
+    const stockValue = (product) => num(stockMap.value[product?.id]);
 
     const currentTab = ref('matrix');
     const rows = ref(state.rows);
@@ -108,6 +114,7 @@ createApp({
     let syncTimer = null;
     let pollingTimer = null;
     let applyingRemote = false;
+    let skipNextSync = false;
     const dirtyRows = new Set();
 
     const tabs = [
@@ -406,7 +413,7 @@ createApp({
       });
       return Object.values(map)
         .map((item) => {
-          const stockQty = num(stockMap.value[item.id] ?? stockMap.value[item.code]);
+          const stockQty = num(stockMap.value[item.id]);
           const realBuy = Math.max(0, round3(item.demandQty - stockQty));
           return { ...item, stockQty, realBuy, subTotal: Math.round(realBuy * item.price) };
         })
@@ -477,7 +484,7 @@ createApp({
         const parsed = JSON.parse(raw);
         if (Array.isArray(parsed.schools) && parsed.schools.length) schools.value = parsed.schools;
         if (Array.isArray(parsed.products) && parsed.products.length) products.value = parsed.products;
-        if (parsed.stockMap && typeof parsed.stockMap === 'object') stockMap.value = parsed.stockMap;
+        if (parsed.stockMap && typeof parsed.stockMap === 'object') stockMap.value = normalizeStockMap(parsed.stockMap);
         if (Array.isArray(parsed.rows) && parsed.rows.length) rows.value = parsed.rows;
         if (parsed.deliveryDate) deliveryDate.value = parsed.deliveryDate;
         rows.value.forEach((row) => {
@@ -556,6 +563,59 @@ createApp({
       return apiJson(`/api/orders?date=${encodeURIComponent(date)}`, { method: 'DELETE' });
     }
 
+    function applyOrderRows(orderRecords) {
+      const incomingRows = ordersToRows(orderRecords);
+      const incomingByProductId = new Map(incomingRows.map((row) => [String(row.productId || ''), row]));
+      const nextRows = [];
+      rows.value.forEach((localRow) => {
+        const key = String(localRow.productId || '');
+        const incoming = incomingByProductId.get(key);
+        const isLocked = Boolean(localRow.isDirty) || dirtyRows.has(localRow.id) || activeEditingCell.value?.rowId === localRow.id;
+        if (incoming) {
+          nextRows.push(isLocked ? localRow : incoming);
+          if (!isLocked) incomingByProductId.delete(key);
+          return;
+        }
+        if (isLocked || !key) nextRows.push(localRow);
+      });
+      incomingByProductId.forEach((incoming) => nextRows.push(incoming));
+      rows.value = nextRows.length ? nextRows : [emptyRow()];
+      rows.value.forEach((row) => {
+        ensureRowSchools(row);
+        recalcRow(row);
+      });
+      parserPreview.value = summaryList.value;
+    }
+
+    async function fetchDailyOrders(dateValue = deliveryDate.value) {
+      try {
+        setStatus('Syncing (Polling)', 'API', `Đang lấy đơn hàng ngày ${dateValue}.`);
+        const orderRows = await fetchOrders(dateValue);
+        applyingRemote = true;
+        applyOrderRows(Array.isArray(orderRows) ? orderRows : []);
+        applyingRemote = false;
+        setStatus('Connected (Polling)', 'API', `Đã tải đơn hàng ngày ${dateValue}.`);
+        persistLocal();
+        return true;
+      } catch (error) {
+        applyingRemote = false;
+        logError('fetchDailyOrders', error);
+        addToast('Không lấy được đơn hàng theo ngày', 'error');
+        setStatus('Offline', 'Local cache', 'Backend không khả dụng; đang dùng dữ liệu local.');
+        return false;
+      }
+    }
+
+    async function changeDeliveryDate() {
+      dirtyRows.clear();
+      activeEditingCell.value = null;
+      rows.value = [emptyRow()];
+      persistLocal();
+      stopPollingFallback();
+      await fetchDailyOrders();
+      startPollingFallback();
+    }
+
     async function pullApiState() {
       try {
         setStatus('Syncing (Polling)', 'API', 'Đang lấy dữ liệu mới từ backend.');
@@ -615,36 +675,8 @@ createApp({
           byId.forEach((product) => nextProducts.push(product));
           products.value = nextProducts;
         }
-        if (stockRows && typeof stockRows === 'object') stockMap.value = { ...stockRows };
-        if (Array.isArray(orderRows) && orderRows.length) {
-          const incomingRows = ordersToRows(orderRows);
-          const incomingByProductId = new Map(incomingRows.map((row) => [String(row.productId || ''), row]));
-          const nextRows = [];
-          rows.value.forEach((localRow) => {
-            const key = String(localRow.productId || '');
-            const incoming = incomingByProductId.get(key);
-            const isLocked = Boolean(localRow.isDirty) || dirtyRows.has(localRow.id) || activeEditingCell.value?.rowId === localRow.id;
-            if (incoming) {
-              if (isLocked) {
-                nextRows.push(localRow);
-              } else {
-                nextRows.push(incoming);
-                incomingByProductId.delete(key);
-              }
-              return;
-            }
-            if (isLocked || !key) {
-              nextRows.push(localRow);
-            }
-          });
-          incomingByProductId.forEach((incoming) => nextRows.push(incoming));
-          rows.value = nextRows.length ? nextRows : [emptyRow()];
-        }
-        rows.value.forEach((row) => {
-          ensureRowSchools(row);
-          recalcRow(row);
-        });
-        parserPreview.value = summaryList.value;
+        if (stockRows && typeof stockRows === 'object') stockMap.value = normalizeStockMap(stockRows);
+        if (Array.isArray(orderRows)) applyOrderRows(orderRows);
         applyingRemote = false;
         setStatus('Connected (Polling)', 'API', 'Đã đồng bộ dữ liệu qua HTTP polling.');
         persistLocal();
@@ -674,7 +706,7 @@ createApp({
         price: num(product.price)
       }));
       const stockTasks = Object.entries(stockMap.value).map(([product_id, qtyValue]) => saveStockApi({
-        product_id: productKey(resolveProduct(product_id) || { id: product_id }),
+        product_id,
         qty: num(qtyValue)
       }));
       const orderTasks = rows.value.flatMap((row) => rowToOrderRecords(row).map((order) => upsertOrderApi(order)));
@@ -753,10 +785,10 @@ createApp({
 
     async function deleteProduct(code) {
       if (!confirm(`Xoá sản phẩm ${code.toUpperCase()}?`)) return;
-      products.value = products.value.filter((product) => norm(product.code) !== norm(code) && norm(product.id) !== norm(code));
       const product = resolveProduct(code);
+      products.value = products.value.filter((product) => norm(product.code) !== norm(code) && norm(product.id) !== norm(code));
       delete stockMap.value[code];
-      if (product) delete stockMap.value[productKey(product)];
+      if (product?.id) delete stockMap.value[product.id];
       rows.value.forEach((row) => {
         if (norm(row.shortcut) === norm(code)) {
           row.shortcut = '';
@@ -860,9 +892,24 @@ createApp({
       if (!code) return;
       const product = resolveProduct(code);
       if (!product) return;
-      stockMap.value = { ...stockMap.value, [productKey(product)]: num(stockForm.value.qty) };
+      stockMap.value = { ...stockMap.value, [product.id]: num(stockForm.value.qty) };
       stockForm.value = { product_code: '', qty: 0 };
       scheduleSync();
+    }
+
+    async function adjustStock(product, delta) {
+      if (!product?.id) return;
+      const nextQty = Math.max(0, round3(stockValue(product) + delta));
+      skipNextSync = true;
+      stockMap.value = { ...stockMap.value, [product.id]: nextQty };
+      persistLocal();
+      try {
+        await saveStockApi({ product_id: product.id, qty: nextQty });
+        addToast(`Đã cập nhật tồn kho ${product.code}`, 'success');
+      } catch (error) {
+        logError('adjustStock', error);
+        addToast(`Cập nhật tồn kho ${product.code} thất bại`, 'error');
+      }
     }
 
     async function fillParserFromClipboard() {
@@ -960,8 +1007,8 @@ createApp({
       stopPollingFallback();
       pollingTimer = setInterval(() => {
         if (navigator.onLine) pullApiState();
-      }, 10000);
-      setStatus('Connected (Polling)', 'API', 'Đang đồng bộ qua HTTP polling mỗi 10 giây.');
+      }, 60000);
+      setStatus('Connected (Polling)', 'API', 'Đang đồng bộ qua HTTP polling mỗi 60 giây.');
     }
 
     function stopPollingFallback() {
@@ -971,8 +1018,14 @@ createApp({
       }
     }
 
-    watch([schools, products, stockMap, rows, deliveryDate], () => {
-      if (!applyingRemote) scheduleSync();
+    watch([schools, products, stockMap, rows], () => {
+      if (applyingRemote) return;
+      if (skipNextSync) {
+        skipNextSync = false;
+        persistLocal();
+        return;
+      }
+      scheduleSync();
     }, { deep: true });
 
     onMounted(async () => {
@@ -1005,6 +1058,7 @@ createApp({
       tabs,
       currentTab,
       deliveryDate,
+      changeDeliveryDate,
       rows,
       schools,
       products,
@@ -1067,6 +1121,7 @@ createApp({
       addDefaultSchool,
       applySchoolTheme,
       saveStock,
+      adjustStock,
       exportCSV,
       copyDebugLogs,
       scheduleSync,
