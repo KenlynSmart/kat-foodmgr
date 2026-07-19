@@ -11,6 +11,7 @@
   <script src="https://cdn.tailwindcss.com"></script>
   <link rel="stylesheet" href="styles.css">
   <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
   <script defer src="app.js"></script>
 </head>
 <body class="bg-slate-50 text-slate-800">
@@ -28,10 +29,13 @@
             </div>
           </div>
           <div class="flex flex-wrap items-center gap-2 text-xs">
+            <span class="badge">Chế độ: Thủ công</span>
             <span class="badge">Trạng thái: {{ syncStatus }}</span>
-            <span class="badge">Nguồn: {{ dataOrigin }}</span>
-            <span class="badge">Cập nhật: {{ lastSyncLabel }}</span>
-            <button @click="syncNow" class="btn-ghost">Đồng bộ ngay</button>
+            <span class="badge">Lần cuối: {{ lastSyncLabel }}</span>
+            <button @click="manuallySyncAllData" :disabled="isSyncingManual" class="btn-ghost disabled:opacity-60">
+              <i class="fas fa-sync" :class="isSyncingManual ? 'animate-spin' : ''"></i>
+              {{ isSyncingManual ? 'Đang đồng bộ...' : 'Đồng bộ dữ liệu' }}
+            </button>
             <button @click="copyDebugLogs" class="btn-ghost">Sao chép log</button>
           </div>
         </div>
@@ -75,7 +79,7 @@
             <div class="text-sm font-semibold text-slate-700">
               Tổng tiền trường: {{ money(totalSchoolMoney) }} · Thực mua: {{ money(totalRealCost) }} · Tiết kiệm: {{ money(totalSavedMoney) }}
             </div>
-            <div class="text-xs text-slate-500">Local-first · realtime/polling fallback · no auto-seed writes</div>
+            <div class="text-xs text-slate-500">Local-first · chỉ đồng bộ khi người dùng bấm nút</div>
           </div>
           <div class="overflow-x-auto">
             <table class="min-w-full text-sm">
@@ -139,6 +143,37 @@
               <i class="fa-solid text-2xl" :class="school.icon || 'fa-school'"></i>
             </div>
             <div class="mt-3 text-2xl font-extrabold">{{ money(totalBySchool[school.id] || 0) }}</div>
+          </div>
+        </div>
+
+        <div class="panel border-2 border-dashed border-emerald-200 bg-emerald-50/40 space-y-4">
+          <div class="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+            <div>
+              <h2 class="section-title">Nhập đơn hàng từ Excel</h2>
+              <p class="section-subtitle">Cột A-D là mã, tên, ĐVT, đơn giá; các cột sau là tên hoặc mã trường.</p>
+            </div>
+            <label for="excel-upload-input" class="btn-primary cursor-pointer">
+              <i class="fa-solid fa-file-excel mr-2"></i>Tải tệp Excel đơn hàng (.xlsx)
+            </label>
+            <input ref="excelFileInput" id="excel-upload-input" type="file" accept=".xlsx,.xls" @change="handleExcelUpload" class="hidden">
+          </div>
+          <div v-if="importSummary" class="grid sm:grid-cols-2 lg:grid-cols-4 gap-3">
+            <div class="rounded-2xl bg-white border border-emerald-100 p-4">
+              <div class="text-xs uppercase text-slate-500">Dòng đã đọc</div>
+              <div class="mt-1 text-2xl font-extrabold text-emerald-700">{{ importSummary.totalRows }}</div>
+            </div>
+            <div class="rounded-2xl bg-white border border-emerald-100 p-4">
+              <div class="text-xs uppercase text-slate-500">Mặt hàng mới</div>
+              <div class="mt-1 text-2xl font-extrabold text-emerald-700">{{ importSummary.newProducts }}</div>
+            </div>
+            <div class="rounded-2xl bg-white border border-emerald-100 p-4">
+              <div class="text-xs uppercase text-slate-500">Tổng số lượng</div>
+              <div class="mt-1 text-2xl font-extrabold text-emerald-700">{{ qty(importSummary.totalQty) }}</div>
+            </div>
+            <div class="rounded-2xl bg-white border border-emerald-100 p-4">
+              <div class="text-xs uppercase text-slate-500">Doanh thu tính toán</div>
+              <div class="mt-1 text-2xl font-extrabold text-emerald-700">{{ money(importSummary.totalRevenue) }}</div>
+            </div>
           </div>
         </div>
       </section>
@@ -388,6 +423,37 @@
         </div>
       </section>
     </main>
+
+    <div v-if="showNewProductsModal" class="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/70 p-4 no-print">
+      <div class="w-full max-w-5xl rounded-2xl bg-white p-6 shadow-2xl space-y-4 max-h-[90vh] overflow-auto">
+        <div class="flex items-center justify-between gap-3">
+          <div>
+            <h3 class="text-lg font-bold text-emerald-700">Phát Hiện Mặt Hàng Mới - Vui Lòng Kiểm Duyệt</h3>
+            <p class="text-sm text-slate-500">Kiểm tra và chỉnh sửa thông tin trước khi thêm vào danh mục.</p>
+          </div>
+          <button @click="resetExcelImport" class="btn-secondary">Hủy bỏ Import</button>
+        </div>
+        <div class="overflow-x-auto">
+          <table class="min-w-full text-sm">
+            <thead class="thead">
+              <tr><th class="th">Mã</th><th class="th">Tên sản phẩm</th><th class="th">ĐVT</th><th class="th text-right">Đơn giá</th></tr>
+            </thead>
+            <tbody class="divide-y divide-slate-100">
+              <tr v-for="item in quarantinedNewProducts" :key="item.id || item.code">
+                <td class="px-3 py-2"><input v-model="item.code" class="input uppercase"></td>
+                <td class="px-3 py-2"><input v-model="item.name" class="input"></td>
+                <td class="px-3 py-2"><input v-model="item.unit" class="input"></td>
+                <td class="px-3 py-2"><input v-model.number="item.price" type="number" min="0" class="input text-right"></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="flex justify-end gap-2">
+          <button @click="resetExcelImport" class="btn-secondary">Hủy bỏ Import</button>
+          <button @click="approveNewProductsImport" class="btn-primary">Xác Nhận Thêm Toàn Bộ</button>
+        </div>
+      </div>
+    </div>
 
     <div v-if="showSchoolDeleteModal" class="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/70 p-4 no-print">
       <div class="w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl space-y-4">
