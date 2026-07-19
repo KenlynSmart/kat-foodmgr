@@ -170,7 +170,7 @@
         </div>
       </section>
 
-      <section v-show="currentTab === 'catalog'" class="grid lg:grid-cols-2 gap-6">
+      <section v-show="currentTab === 'catalog'" class="space-y-6">
         <div class="panel space-y-4">
           <div class="flex items-center justify-between gap-3">
             <div>
@@ -210,13 +210,16 @@
           </div>
         </div>
 
-        <div class="panel space-y-4">
-          <div class="flex items-center justify-between gap-3">
+        <div class="panel space-y-4 border-2 border-slate-200">
+          <div class="flex items-center justify-between gap-3 flex-wrap">
             <div>
-              <h2 class="section-title">Danh mục schools</h2>
-              <p class="section-subtitle">Mỗi điểm trường có theme riêng dùng trong ma trận và biên bản in.</p>
+              <h2 class="section-title">Cấu Hình Hệ Thống</h2>
+              <p class="section-subtitle">Quản lý điểm trường — xóa trường cần xác nhận bảo mật để tránh mất dữ liệu lịch sử.</p>
             </div>
-            <input v-model="schoolFilter" class="input w-56" placeholder="Tìm trường">
+            <div class="flex gap-2">
+              <input v-model="schoolFilter" class="input w-56" placeholder="Tìm trường">
+              <button @click="addDefaultSchool" class="btn-secondary">Thêm trường mẫu</button>
+            </div>
           </div>
           <div class="grid sm:grid-cols-3 gap-2">
             <input v-model="schoolForm.id" :disabled="editingSchool" class="input" placeholder="code">
@@ -240,16 +243,17 @@
           <div class="overflow-x-auto">
             <table class="min-w-full text-sm">
               <thead class="thead">
-                <tr><th class="th">Code</th><th class="th">Tên</th><th class="th">Theme</th><th class="th"></th></tr>
+                <tr><th class="th">Code</th><th class="th">Tên</th><th class="th">Theme</th><th class="th">Icon</th><th class="th"></th></tr>
               </thead>
               <tbody class="divide-y divide-slate-100">
                 <tr v-for="school in filteredSchools" :key="school.id">
                   <td class="px-3 py-2 font-semibold">{{ school.code || school.id }}</td>
                   <td class="px-3 py-2">{{ school.name }}</td>
                   <td class="px-3 py-2"><span class="px-2 py-1 rounded-full border" :style="themeStyle(school)">{{ school.bg_color }}</span></td>
+                  <td class="px-3 py-2"><i :class="school.icon || 'fa-school'"></i></td>
                   <td class="px-3 py-2 text-right whitespace-nowrap">
                     <button @click="editSchool(school)" class="text-emerald-700 mr-2">Sửa</button>
-                    <button @click="deleteSchool(school.id || school.code)" class="text-rose-600">Xoá</button>
+                    <button @click="promptDeleteSchool(school)" class="text-rose-600">Xoá</button>
                   </td>
                 </tr>
               </tbody>
@@ -259,71 +263,46 @@
       </section>
 
       <section v-show="currentTab === 'stock'" class="panel space-y-4">
-        <div class="flex items-center justify-between flex-wrap gap-3">
+        <div class="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
           <div>
-            <h2 class="section-title">Tồn kho</h2>
-            <p class="section-subtitle">Cập nhật local hoặc cloud; số thập phân được hỗ trợ.</p>
+            <h2 class="section-title">Quản Lý Tồn Kho</h2>
+            <p class="section-subtitle">Điều chỉnh tồn kho nhanh bằng nút chạm hoặc nhập trực tiếp, đồng bộ tức thì.</p>
           </div>
-          <input v-model="stockFilter" class="input w-56" placeholder="Tìm sản phẩm">
-        </div>
-        <div class="grid lg:grid-cols-3 gap-4">
-          <div class="rounded-2xl border border-slate-100 p-4 space-y-3">
-            <select v-model="stockForm.product_code" class="input">
-              <option disabled value="">Chọn sản phẩm</option>
-              <option v-for="product in products" :key="product.id || product.code" :value="product.code">{{ product.code }} · {{ product.name }}</option>
-            </select>
-            <input v-model.number="stockForm.qty" type="number" step="any" min="0" class="input" placeholder="qty">
-            <button @click="saveStock" class="btn-primary w-full">Lưu tồn kho</button>
-          </div>
-          <div class="lg:col-span-2 overflow-x-auto">
-            <table class="min-w-full text-sm">
-              <thead class="thead">
-                <tr><th class="th">Product</th><th class="th text-right">Qty</th><th class="th"></th></tr>
-              </thead>
-              <tbody class="divide-y divide-slate-100">
-                <tr v-for="product in filteredStockProducts" :key="product.id || product.code">
-                  <td class="px-3 py-2">{{ product.code }} · {{ product.name }}</td>
-                  <td class="px-3 py-2 text-right w-48">
-                    <div class="flex items-center justify-end gap-1">
-                      <button @click="adjustStock(product, -1)" class="rounded-lg border border-slate-200 px-2 py-1 font-bold text-slate-600 hover:bg-slate-100">-1</button>
-                      <button @click="adjustStock(product, -0.1)" class="rounded-lg border border-slate-200 px-2 py-1 font-bold text-slate-600 hover:bg-slate-100">-0.1</button>
-                      <input v-model.number="stockMap[product.id]" type="number" step="any" min="0" @focus="setActiveEditingCell(`stock:${product.id}`, 'qty')" @blur="clearActiveEditingCell(); scheduleSync()" @change="scheduleSync" class="input w-24 text-right">
-                      <button @click="adjustStock(product, 0.1)" class="rounded-lg border border-slate-200 px-2 py-1 font-bold text-slate-600 hover:bg-slate-100">+0.1</button>
-                      <button @click="adjustStock(product, 1)" class="rounded-lg border border-slate-200 px-2 py-1 font-bold text-slate-600 hover:bg-slate-100">+1</button>
-                    </div>
-                  </td>
-                  <td class="px-3 py-2 text-right">
-                    <button @click="stockForm = { product_code: product.code, qty: stockMap[product.id] || 0 }" class="text-emerald-700">Chọn</button>
-                  </td>
-                </tr>
-              </tbody>
-            </table>
+          <div class="relative">
+            <i class="fa-solid fa-magnifying-glass absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"></i>
+            <input v-model="stockFilter" class="input pl-9 w-72" placeholder="Tìm theo mã hoặc tên...">
           </div>
         </div>
-      </section>
-
-      <section v-show="currentTab === 'schools'" class="panel">
-        <div class="flex items-center justify-between mb-4">
-          <div>
-            <h2 class="section-title">Điểm trường hoạt động</h2>
-            <p class="section-subtitle">Các cột trong ma trận và biên bản in theo đúng thứ tự danh sách này.</p>
-          </div>
-          <button @click="addDefaultSchool" class="btn-primary">Thêm trường mẫu</button>
-        </div>
-        <div class="overflow-x-auto">
+        <div class="overflow-x-auto rounded-2xl border border-slate-100">
           <table class="min-w-full text-sm">
             <thead class="thead">
-              <tr><th class="th">ID</th><th class="th">Tên</th><th class="th">Theme</th><th class="th">Icon</th><th class="th"></th></tr>
+              <tr>
+                <th class="th w-12 text-center">#</th>
+                <th class="th">Mã</th>
+                <th class="th">Tên sản phẩm</th>
+                <th class="th text-center w-24">ĐVT</th>
+                <th class="th text-right w-80">Tồn kho khả dụng</th>
+                <th class="th text-center w-28">Trạng thái</th>
+              </tr>
             </thead>
             <tbody class="divide-y divide-slate-100">
-              <tr v-for="school in schools" :key="school.id">
-                <td class="px-3 py-2 font-semibold">{{ school.code || school.id }}</td>
-                <td class="px-3 py-2">{{ school.name }}</td>
-                <td class="px-3 py-2">{{ school.bg_color }}</td>
-                <td class="px-3 py-2">{{ school.icon }}</td>
-                <td class="px-3 py-2 text-right whitespace-nowrap">
-                  <button @click="editSchool(school)" class="text-emerald-700 mr-2">Sửa</button>
-                    <button @click="deleteSchool(school.code || school.id)" class="text-rose-600">Xoá</button>
+              <tr v-for="(product, index) in filteredStockProducts" :key="product.id" class="hover:bg-slate-50">
+                <td class="px-3 py-3 text-center text-slate-400">{{ index + 1 }}</td>
+                <td class="px-3 py-3 font-bold uppercase">{{ product.code }}</td>
+                <td class="px-3 py-3">{{ product.name }}</td>
+                <td class="px-3 py-3 text-center text-slate-500">{{ product.unit }}</td>
+                <td class="px-3 py-3 text-right">
+                  <div class="flex items-center justify-end gap-2">
+                    <button @click="adjustStock(product, -1)" class="min-w-[2.5rem] h-10 rounded-full border border-slate-300 bg-slate-100 font-bold text-slate-700 hover:bg-slate-200 active:bg-slate-300 flex items-center justify-center transition">-1</button>
+                    <button @click="adjustStock(product, -0.1)" class="min-w-[2.5rem] h-10 rounded-full border border-slate-300 bg-slate-100 font-bold text-slate-700 hover:bg-slate-200 active:bg-slate-300 flex items-center justify-center transition text-xs">-0.1</button>
+                    <input type="number" min="0" step="any" v-model.number="stockMap[product.id]" @focus="setActiveEditingCell(`stock:${product.id}`, 'qty')" @blur="clearActiveEditingCell(); scheduleSync()" @change="scheduleSync" class="input w-24 text-right px-2">
+                    <button @click="adjustStock(product, 0.1)" class="min-w-[2.5rem] h-10 rounded-full border border-slate-300 bg-slate-100 font-bold text-slate-700 hover:bg-slate-200 active:bg-slate-300 flex items-center justify-center transition text-xs">+0.1</button>
+                    <button @click="adjustStock(product, 1)" class="min-w-[2.5rem] h-10 rounded-full border border-slate-300 bg-slate-100 font-bold text-slate-700 hover:bg-slate-200 active:bg-slate-300 flex items-center justify-center transition">+1</button>
+                  </div>
+                </td>
+                <td class="px-3 py-3 text-center">
+                  <span v-if="num(stockMap[product.id]) === 0" class="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2.5 py-1 text-xs font-bold text-amber-800 border border-amber-200"><i class="fa-solid fa-triangle-exclamation"></i> Hết kho</span>
+                  <span v-else class="text-emerald-600 text-xs font-semibold">Có hàng</span>
                 </td>
               </tr>
             </tbody>
@@ -345,6 +324,7 @@
 
         <div class="grid gap-6">
           <article v-for="receipt in receipts" :key="receipt.id"
+            :id="`print-receipt-container-${receipt.id}`"
             class="print-sheet print-card bg-white rounded-3xl border border-slate-200 shadow-sm overflow-hidden"
             :class="printSchoolId !== 'all' && printSchoolId !== receipt.id ? 'print-hidden' : ''">
             <div class="p-5 flex flex-wrap items-center justify-between gap-3" :style="themeStyle(receipt.theme)">
@@ -408,6 +388,19 @@
         </div>
       </section>
     </main>
+
+    <div v-if="showSchoolDeleteModal" class="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/70 p-4 no-print">
+      <div class="w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl space-y-4">
+        <h3 class="text-lg font-bold text-rose-700">Xác nhận xóa trường</h3>
+        <p class="text-sm text-slate-600">Hành động này sẽ xóa trường <strong>{{ schoolToDelete?.name || schoolToDelete?.code || '' }}</strong> và có thể xóa dữ liệu lịch sử liên quan. Để tiếp tục, hãy nhập chính xác cụm từ bên dưới.</p>
+        <div class="rounded-lg bg-amber-50 border border-amber-200 px-3 py-2 text-sm font-mono text-amber-900 select-all">XAC NHAN XOA</div>
+        <input v-model="schoolDeleteConfirmText" class="input w-full" placeholder="Nhập XAC NHAN XOA">
+        <div class="flex gap-2 justify-end">
+          <button @click="closeSchoolDeleteModal" class="btn-secondary">Huỷ</button>
+          <button @click="confirmDeleteSchool" class="btn-danger">Xác nhận xóa</button>
+        </div>
+      </div>
+    </div>
   </div>
 </body>
 </html>

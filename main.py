@@ -203,6 +203,22 @@ async def serve_frontend():
     """
 
 
+@app.get("/app.js")
+async def serve_app_js():
+    file_path = Path(__file__).with_name("app.js")
+    if file_path.exists():
+        return FileResponse(file_path, media_type="application/javascript")
+    raise HTTPException(status_code=404, detail="app.js not found")
+
+
+@app.get("/styles.css")
+async def serve_styles_css():
+    file_path = Path(__file__).with_name("styles.css")
+    if file_path.exists():
+        return FileResponse(file_path, media_type="text/css")
+    raise HTTPException(status_code=404, detail="styles.css not found")
+
+
 @app.get("/api/schools", response_model=List[SchoolRecord])
 async def get_schools():
     try:

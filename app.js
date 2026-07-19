@@ -109,10 +109,13 @@ createApp({
     const schoolForm = ref({ id: '', name: '', bg_color: 'bg-sky-50', text_color: 'text-sky-800', border_color: 'border-sky-200', icon: 'fa-school', theme: 'bg-sky-50' });
     const stockForm = ref({ product_code: '', qty: 0 });
     const activeEditingCell = ref(null);
+    const showSchoolDeleteModal = ref(false);
+    const schoolToDelete = ref(null);
+    const schoolDeleteConfirmText = ref('');
 
     let syncing = false;
     let syncTimer = null;
-    let pollingTimer = null;
+    let backgroundPollingTimer = null;
     let applyingRemote = false;
     let skipNextSync = false;
     const dirtyRows = new Set();
@@ -122,7 +125,6 @@ createApp({
       { id: 'parser', label: 'Dán dữ liệu', icon: 'fa-solid fa-paste' },
       { id: 'catalog', label: 'Danh mục', icon: 'fa-solid fa-book' },
       { id: 'stock', label: 'Tồn kho', icon: 'fa-solid fa-boxes-stacked' },
-      { id: 'schools', label: 'Trường học', icon: 'fa-solid fa-school' },
       { id: 'receipts', label: 'Biên bản in', icon: 'fa-solid fa-print' },
       { id: 'debug', label: 'Debug', icon: 'fa-solid fa-terminal' }
     ];
@@ -565,6 +567,10 @@ createApp({
 
     function applyOrderRows(orderRecords) {
       const incomingRows = ordersToRows(orderRecords);
+      if (incomingRows.length === 0) {
+        const hasProtected = rows.value.some((row) => row.isDirty || dirtyRows.has(row.id) || activeEditingCell.value?.rowId === row.id);
+        if (hasProtected) return;
+      }
       const incomingByProductId = new Map(incomingRows.map((row) => [String(row.productId || ''), row]));
       const nextRows = [];
       rows.value.forEach((localRow) => {
@@ -591,14 +597,17 @@ createApp({
       try {
         setStatus('Syncing (Polling)', 'API', `Đang lấy đơn hàng ngày ${dateValue}.`);
         const orderRows = await fetchOrders(dateValue);
+        skipNextSync = true;
         applyingRemote = true;
         applyOrderRows(Array.isArray(orderRows) ? orderRows : []);
         applyingRemote = false;
+        nextTick(() => { skipNextSync = false; });
         setStatus('Connected (Polling)', 'API', `Đã tải đơn hàng ngày ${dateValue}.`);
         persistLocal();
         return true;
       } catch (error) {
         applyingRemote = false;
+        skipNextSync = false;
         logError('fetchDailyOrders', error);
         addToast('Không lấy được đơn hàng theo ngày', 'error');
         setStatus('Offline', 'Local cache', 'Backend không khả dụng; đang dùng dữ liệu local.');
@@ -611,9 +620,9 @@ createApp({
       activeEditingCell.value = null;
       rows.value = [emptyRow()];
       persistLocal();
-      stopPollingFallback();
+      stopPollingEngine();
       await fetchDailyOrders();
-      startPollingFallback();
+      setupPollingEngine();
     }
 
     async function pullApiState() {
@@ -626,6 +635,7 @@ createApp({
           fetchOrders(deliveryDate.value)
         ]);
 
+        skipNextSync = true;
         applyingRemote = true;
         if (Array.isArray(schoolRows) && schoolRows.length) {
           const byId = new Map(schoolRows.map((school) => {
@@ -678,11 +688,13 @@ createApp({
         if (stockRows && typeof stockRows === 'object') stockMap.value = normalizeStockMap(stockRows);
         if (Array.isArray(orderRows)) applyOrderRows(orderRows);
         applyingRemote = false;
+        nextTick(() => { skipNextSync = false; });
         setStatus('Connected (Polling)', 'API', 'Đã đồng bộ dữ liệu qua HTTP polling.');
         persistLocal();
         return true;
       } catch (error) {
         applyingRemote = false;
+        skipNextSync = false;
         logError('pullApiState', error);
         addToast('Không lấy được dữ liệu từ backend', 'error');
         setStatus('Offline', 'Local cache', 'Backend không khả dụng; đang dùng local cache.');
@@ -744,7 +756,7 @@ createApp({
 
     function scheduleSync() {
       persistLocal();
-      if (applyingRemote) return;
+      if (applyingRemote || syncing) return;
       clearTimeout(syncTimer);
       syncTimer = setTimeout(() => {
         if (navigator.onLine) syncNow();
@@ -852,8 +864,31 @@ createApp({
       schoolForm.value = { id: '', name: '', bg_color: 'bg-sky-50', text_color: 'text-sky-800', border_color: 'border-sky-200', icon: 'fa-school', theme: 'bg-sky-50' };
     }
 
-    async function deleteSchool(id) {
-      if (!confirm(`Xoá trường ${id}?`)) return;
+    function promptDeleteSchool(school) {
+      schoolToDelete.value = school;
+      schoolDeleteConfirmText.value = '';
+      showSchoolDeleteModal.value = true;
+    }
+
+    function closeSchoolDeleteModal() {
+      showSchoolDeleteModal.value = false;
+      schoolToDelete.value = null;
+      schoolDeleteConfirmText.value = '';
+    }
+
+    async function confirmDeleteSchool() {
+      const expected = 'XAC NHAN XOA';
+      const input = schoolDeleteConfirmText.value.replace(/\s+/g, ' ').trim();
+      if (input !== expected) {
+        addToast('Bạn phải nhập đúng "XAC NHAN XOA" để xác nhận xóa', 'warn');
+        return;
+      }
+      const id = schoolToDelete.value?.id || schoolToDelete.value?.code;
+      closeSchoolDeleteModal();
+      if (id) await executeDeleteSchool(id);
+    }
+
+    async function executeDeleteSchool(id) {
       const target = resolveSchool(id);
       schools.value = schools.value.filter((school) => norm(school.id) !== norm(id) && norm(school.code) !== norm(id));
       rows.value.forEach((row) => {
@@ -867,7 +902,7 @@ createApp({
         await deleteSchoolApi(id);
         addToast(`Đã xoá trường ${id}`, 'success');
       } catch (error) {
-        logError('deleteSchool', error);
+        logError('executeDeleteSchool', error);
         addToast(`Xoá trường ${id} thất bại`, 'error');
       }
       scheduleSync();
@@ -986,8 +1021,44 @@ createApp({
     }
 
     function printSchool(id) {
-      printSchoolId.value = id;
-      nextTick(() => window.print());
+      const container = document.getElementById(`print-receipt-container-${id}`);
+      if (!container) return;
+      const iframe = document.createElement('iframe');
+      iframe.setAttribute('style', 'position:absolute;left:-9999px;top:-9999px;width:1px;height:1px;border:none;');
+      document.body.appendChild(iframe);
+      const doc = iframe.contentWindow.document;
+      const styles = Array.from(document.querySelectorAll('link[rel="stylesheet"]')).map((link) => {
+        const href = link.getAttribute('href');
+        if (!href) return link.outerHTML;
+        return `<link rel="stylesheet" href="${new URL(href, window.location.href).href}">`;
+      }).join('');
+      doc.open();
+      doc.write(`
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8">
+  <title>Biên bản giao hàng</title>
+  ${styles}
+  <style>
+    body { margin: 0; padding: 0; background: #fff; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    .no-print { display: none !important; }
+    @media print { body { -webkit-print-color-adjust: exact; print-color-adjust: exact; } }
+  </style>
+</head>
+<body>
+  ${container.innerHTML}
+</body>
+</html>
+      `);
+      doc.close();
+      const cleanup = () => {
+        if (iframe.parentNode) iframe.parentNode.removeChild(iframe);
+      };
+      iframe.contentWindow.addEventListener('afterprint', cleanup);
+      setTimeout(cleanup, 60000);
+      iframe.contentWindow.focus();
+      iframe.contentWindow.print();
     }
 
     function recalcAllRows() {
@@ -999,22 +1070,24 @@ createApp({
     }
 
     function loadInitialState() {
+      skipNextSync = true;
       hydrateLocal();
       recalcAllRows();
+      nextTick(() => { skipNextSync = false; });
     }
 
-    function startPollingFallback() {
-      stopPollingFallback();
-      pollingTimer = setInterval(() => {
+    function setupPollingEngine() {
+      stopPollingEngine();
+      backgroundPollingTimer = setInterval(() => {
         if (navigator.onLine) pullApiState();
       }, 60000);
       setStatus('Connected (Polling)', 'API', 'Đang đồng bộ qua HTTP polling mỗi 60 giây.');
     }
 
-    function stopPollingFallback() {
-      if (pollingTimer) {
-        clearInterval(pollingTimer);
-        pollingTimer = null;
+    function stopPollingEngine() {
+      if (backgroundPollingTimer) {
+        clearInterval(backgroundPollingTimer);
+        backgroundPollingTimer = null;
       }
     }
 
@@ -1032,7 +1105,7 @@ createApp({
       loadInitialState();
       setStatus('Syncing (Polling)', 'API', 'Đang khởi tạo dữ liệu cục bộ.');
       await pullApiState();
-      startPollingFallback();
+      setupPollingEngine();
       window.addEventListener('keydown', (event) => {
         if (event.key === 'F2' && currentTab.value === 'matrix') {
           event.preventDefault();
@@ -1117,7 +1190,10 @@ createApp({
       saveSchool,
       editSchool,
       resetSchoolForm,
-      deleteSchool,
+      promptDeleteSchool,
+      closeSchoolDeleteModal,
+      confirmDeleteSchool,
+      executeDeleteSchool,
       addDefaultSchool,
       applySchoolTheme,
       saveStock,
@@ -1127,7 +1203,11 @@ createApp({
       scheduleSync,
       syncNow,
       printAllReceipts,
-      printSchool
+      printSchool,
+      showSchoolDeleteModal,
+      schoolToDelete,
+      schoolDeleteConfirmText,
+      num
     };
   }
 }).mount('#app');
