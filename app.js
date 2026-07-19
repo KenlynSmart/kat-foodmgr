@@ -101,6 +101,7 @@ createApp({
     const dataOrigin = ref('Local cache');
     const statusBanner = ref('');
     const lastSyncAt = ref('');
+    const isSyncingManual = ref(false);
     const debugLogs = ref([]);
     const printSchoolId = ref('all');
     const editingProduct = ref(false);
@@ -112,10 +113,13 @@ createApp({
     const showSchoolDeleteModal = ref(false);
     const schoolToDelete = ref(null);
     const schoolDeleteConfirmText = ref('');
+    const stagedOrders = ref([]);
+    const quarantinedNewProducts = ref([]);
+    const showNewProductsModal = ref(false);
+    const importSummary = ref(null);
+    const excelFileInput = ref(null);
 
     let syncing = false;
-    let syncTimer = null;
-    let backgroundPollingTimer = null;
     let applyingRemote = false;
     let skipNextSync = false;
     const dirtyRows = new Set();
@@ -184,7 +188,7 @@ createApp({
       syncStatus.value = mode;
       dataOrigin.value = origin;
       statusBanner.value = banner;
-      lastSyncAt.value = nowText();
+      if (origin === 'API' && mode === 'Sẵn sàng') lastSyncAt.value = nowText();
     }
 
     const lastSyncLabel = computed(() => lastSyncAt.value || 'chưa có');
@@ -595,14 +599,14 @@ createApp({
 
     async function fetchDailyOrders(dateValue = deliveryDate.value) {
       try {
-        setStatus('Syncing (Polling)', 'API', `Đang lấy đơn hàng ngày ${dateValue}.`);
+        setStatus('Đang đồng bộ', 'API', `Đang lấy đơn hàng ngày ${dateValue}.`);
         const orderRows = await fetchOrders(dateValue);
         skipNextSync = true;
         applyingRemote = true;
         applyOrderRows(Array.isArray(orderRows) ? orderRows : []);
         applyingRemote = false;
         nextTick(() => { skipNextSync = false; });
-        setStatus('Connected (Polling)', 'API', `Đã tải đơn hàng ngày ${dateValue}.`);
+        setStatus('Sẵn sàng', 'API', `Đã tải đơn hàng ngày ${dateValue}.`);
         persistLocal();
         return true;
       } catch (error) {
@@ -620,14 +624,12 @@ createApp({
       activeEditingCell.value = null;
       rows.value = [emptyRow()];
       persistLocal();
-      stopPollingEngine();
       await fetchDailyOrders();
-      setupPollingEngine();
     }
 
     async function pullApiState() {
       try {
-        setStatus('Syncing (Polling)', 'API', 'Đang lấy dữ liệu mới từ backend.');
+        setStatus('Đang đồng bộ', 'API', 'Đang lấy dữ liệu mới từ backend.');
         const [schoolRows, productRows, stockRows, orderRows] = await Promise.all([
           fetchSchools(),
           fetchProducts(),
@@ -689,7 +691,7 @@ createApp({
         if (Array.isArray(orderRows)) applyOrderRows(orderRows);
         applyingRemote = false;
         nextTick(() => { skipNextSync = false; });
-        setStatus('Connected (Polling)', 'API', 'Đã đồng bộ dữ liệu qua HTTP polling.');
+        setStatus('Sẵn sàng', 'API', 'Đã đồng bộ dữ liệu thủ công.');
         persistLocal();
         return true;
       } catch (error) {
@@ -738,7 +740,7 @@ createApp({
           addToast('Đang offline, dùng dữ liệu local', 'warn');
           return;
         }
-        setStatus('Syncing (Polling)', 'API', 'Đang đẩy local lên backend.');
+        setStatus('Đang đồng bộ', 'API', 'Đang đẩy local lên backend.');
         await pushApiState();
         await pullApiState();
         rows.value.forEach((row) => clearRowDirty(row));
@@ -756,11 +758,16 @@ createApp({
 
     function scheduleSync() {
       persistLocal();
-      if (applyingRemote || syncing) return;
-      clearTimeout(syncTimer);
-      syncTimer = setTimeout(() => {
-        if (navigator.onLine) syncNow();
-      }, 900);
+    }
+
+    async function manuallySyncAllData() {
+      if (isSyncingManual.value) return;
+      isSyncingManual.value = true;
+      try {
+        await syncNow();
+      } finally {
+        isSyncingManual.value = false;
+      }
     }
 
     function saveProduct() {
@@ -938,12 +945,160 @@ createApp({
       skipNextSync = true;
       stockMap.value = { ...stockMap.value, [product.id]: nextQty };
       persistLocal();
+      addToast(`Đã cập nhật tồn kho ${product.code} ở local; bấm Đồng bộ thủ công để lưu cloud`, 'info');
+    }
+
+    function clearExcelStaging(keepSummary = false) {
+      stagedOrders.value = [];
+      quarantinedNewProducts.value = [];
+      showNewProductsModal.value = false;
+      if (!keepSummary) importSummary.value = null;
+      if (excelFileInput.value) excelFileInput.value.value = '';
+    }
+
+    function resetExcelImport() {
+      clearExcelStaging(false);
+    }
+
+    function schoolFromHeader(header) {
+      const value = norm(header);
+      return schools.value.find((school) => norm(school.code) === value || norm(school.name) === value || norm(school.id) === value);
+    }
+
+    function buildImportRow(row, schoolColumns) {
+      const code = norm(row[0]);
+      const product = resolveProduct(code);
+      const allocations = {};
+      schoolColumns.forEach(({ index, school }) => {
+        allocations[schoolKey(school)] = round3(num(row[index]));
+      });
+      return {
+        code,
+        name: String(row[1] ?? '').trim(),
+        unit: String(row[2] ?? '').trim() || '-',
+        price: num(row[3]),
+        allocations,
+        productId: product ? productKey(product) : ''
+      };
+    }
+
+    async function handleExcelUpload(event) {
+      const file = event.target.files?.[0];
+      if (!file) return;
+      if (!window.XLSX) {
+        addToast('Chưa tải được thư viện Excel', 'error');
+        return;
+      }
       try {
-        await saveStockApi({ product_id: product.id, qty: nextQty });
-        addToast(`Đã cập nhật tồn kho ${product.code}`, 'success');
+        const buffer = await file.arrayBuffer();
+        const workbook = window.XLSX.read(buffer, { type: 'array' });
+        const sheet = workbook.Sheets[workbook.SheetNames[0]];
+        const matrix = window.XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
+        if (matrix.length < 2) throw new Error('Tệp Excel không có dữ liệu hàng.');
+        const headers = matrix[0];
+        const schoolColumns = headers.slice(4).map((header, offset) => ({
+          index: offset + 4,
+          school: schoolFromHeader(header)
+        })).filter((item) => item.school);
+        if (!schoolColumns.length) throw new Error('Không nhận diện được cột trường học trong hàng tiêu đề.');
+
+        const importedRows = matrix.slice(1)
+          .filter((row) => String(row[0] ?? '').trim())
+          .map((row) => buildImportRow(row, schoolColumns));
+        stagedOrders.value = importedRows.filter((item) => item.productId);
+        quarantinedNewProducts.value = importedRows
+          .filter((item) => !item.productId)
+          .map((item) => ({ ...item, allocationRowData: item.allocations }));
+        importSummary.value = {
+          totalRows: importedRows.length,
+          newProducts: quarantinedNewProducts.value.length,
+          totalQty: round3(importedRows.reduce((sum, item) => sum + Object.values(item.allocations).reduce((subtotal, value) => subtotal + num(value), 0), 0)),
+          totalRevenue: Math.round(importedRows.reduce((sum, item) => sum + Object.values(item.allocations).reduce((subtotal, value) => subtotal + num(value), 0) * num(item.price), 0))
+        };
+        if (quarantinedNewProducts.value.length) {
+          showNewProductsModal.value = true;
+        } else {
+          mergeStagedOrders();
+          clearExcelStaging(true);
+          addToast(`Đã nhập ${importedRows.length} dòng từ Excel`, 'success');
+        }
       } catch (error) {
-        logError('adjustStock', error);
-        addToast(`Cập nhật tồn kho ${product.code} thất bại`, 'error');
+        resetExcelImport();
+        logError('handleExcelUpload', error);
+        addToast(`Không thể đọc tệp Excel: ${error.message}`, 'error');
+      }
+    }
+
+    function mergeStagedOrders() {
+      const imported = stagedOrders.value;
+      imported.forEach((item) => {
+        const product = resolveProduct(item.productId || item.code);
+        if (!product) return;
+        let row = rows.value.find((candidate) => String(candidate.productId || '') === productKey(product));
+        if (!row) {
+          row = emptyRow();
+          schools.value.forEach((school) => { row.schoolQtys[schoolKey(school)] = 0; });
+          rows.value.push(row);
+        }
+        pickProduct(row, product);
+        schools.value.forEach((school) => {
+          const key = schoolKey(school);
+          row.schoolQtys[key] = round3(num(row.schoolQtys[key]) + num(item.allocations[key]));
+        });
+        recalcRow(row);
+        markRowDirty(row);
+      });
+      parserPreview.value = summaryList.value;
+      persistLocal();
+    }
+
+    async function approveNewProductsImport() {
+      try {
+        const approved = [];
+        const approvedCodes = new Set(products.value.map((product) => norm(product.code)));
+        for (const item of quarantinedNewProducts.value) {
+          const code = norm(item.code);
+          if (!code || !item.name.trim()) throw new Error('Mỗi mặt hàng mới cần có mã và tên.');
+          if (approvedCodes.has(code)) {
+            const duplicate = approved.find((product) => norm(product.code) === code);
+            if (duplicate) throw new Error(`Mã sản phẩm bị trùng: ${code}`);
+            throw new Error(`Mã sản phẩm đã tồn tại: ${code}`);
+          }
+          const response = await saveProductApi({
+            code,
+            name: item.name.trim(),
+            unit: item.unit.trim() || '-',
+            price: num(item.price)
+          });
+          const product = {
+            ...(response || {}),
+            id: response?.id || crypto.randomUUID(),
+            code,
+            name: item.name.trim(),
+            unit: item.unit.trim() || '-',
+            price: num(item.price),
+            created_at: today
+          };
+          products.value.unshift(product);
+          approved.push({ ...item, productId: productKey(product), code: product.code });
+          approvedCodes.add(code);
+        }
+        stagedOrders.value.push(...approved);
+        const newProducts = approved.length;
+        showNewProductsModal.value = false;
+        mergeStagedOrders();
+        const importedRows = stagedOrders.value;
+        importSummary.value = {
+          totalRows: importedRows.length,
+          newProducts,
+          totalQty: round3(importedRows.reduce((sum, item) => sum + Object.values(item.allocations).reduce((subtotal, value) => subtotal + num(value), 0), 0)),
+          totalRevenue: Math.round(importedRows.reduce((sum, item) => sum + Object.values(item.allocations).reduce((subtotal, value) => subtotal + num(value), 0) * num(item.price), 0))
+        };
+        clearExcelStaging(true);
+        addToast(`Đã thêm ${newProducts} mặt hàng và nhập đơn hàng`, 'success');
+      } catch (error) {
+        logError('approveNewProductsImport', error);
+        addToast(`Không thể duyệt mặt hàng mới: ${error.message}`, 'error');
       }
     }
 
@@ -1076,49 +1231,22 @@ createApp({
       nextTick(() => { skipNextSync = false; });
     }
 
-    function setupPollingEngine() {
-      stopPollingEngine();
-      backgroundPollingTimer = setInterval(() => {
-        if (navigator.onLine) pullApiState();
-      }, 60000);
-      setStatus('Connected (Polling)', 'API', 'Đang đồng bộ qua HTTP polling mỗi 60 giây.');
-    }
-
-    function stopPollingEngine() {
-      if (backgroundPollingTimer) {
-        clearInterval(backgroundPollingTimer);
-        backgroundPollingTimer = null;
-      }
-    }
-
     watch([schools, products, stockMap, rows], () => {
-      if (applyingRemote) return;
-      if (skipNextSync) {
-        skipNextSync = false;
-        persistLocal();
-        return;
-      }
-      scheduleSync();
+      persistLocal();
     }, { deep: true });
 
-    onMounted(async () => {
+    onMounted(() => {
       loadInitialState();
-      setStatus('Syncing (Polling)', 'API', 'Đang khởi tạo dữ liệu cục bộ.');
-      await pullApiState();
-      setupPollingEngine();
+      setStatus('Sẵn sàng', 'Local cache', 'Chế độ đồng bộ thủ công. Bấm nút Đồng bộ dữ liệu để tải và lưu cloud.');
       window.addEventListener('keydown', (event) => {
         if (event.key === 'F2' && currentTab.value === 'matrix') {
           event.preventDefault();
           addRow();
         }
       });
-      window.addEventListener('online', () => {
-        setStatus('Syncing (Polling)', dataOrigin.value, 'Mạng đã kết nối lại; đang đồng bộ.');
-        syncNow();
-      });
       window.addEventListener('offline', () => {
-        setStatus('Offline', 'Local cache', 'Đang offline; dữ liệu được giữ ở local.');
-        addToast('Mất kết nối mạng', 'warn');
+          setStatus('Offline', 'Local cache', 'Đang offline; dữ liệu được giữ ở local.');
+          addToast('Mất kết nối mạng', 'warn');
       });
       window.addEventListener('afterprint', () => {
         printSchoolId.value = 'all';
@@ -1207,7 +1335,17 @@ createApp({
       showSchoolDeleteModal,
       schoolToDelete,
       schoolDeleteConfirmText,
-      num
+      num,
+      isSyncingManual,
+      manuallySyncAllData,
+      excelFileInput,
+      handleExcelUpload,
+      quarantinedNewProducts,
+      showNewProductsModal,
+      stagedOrders,
+      importSummary,
+      approveNewProductsImport,
+      resetExcelImport
     };
   }
 }).mount('#app');
