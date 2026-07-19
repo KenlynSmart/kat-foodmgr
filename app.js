@@ -115,9 +115,15 @@ createApp({
     const schoolDeleteConfirmText = ref('');
     const stagedOrders = ref([]);
     const quarantinedNewProducts = ref([]);
+    const quarantinedNewSchools = ref([]);
     const showNewProductsModal = ref(false);
     const importSummary = ref(null);
     const excelFileInput = ref(null);
+    const singleSchoolImportModal = ref(false);
+    const singleSchoolImportTab = ref('file');
+    const singleSchoolImportSchoolId = ref('');
+    const singleSchoolImportText = ref('');
+    const singleSchoolImportFileInput = ref(null);
 
     let syncing = false;
     let applyingRemote = false;
@@ -220,7 +226,7 @@ createApp({
 
     function recalcRow(row) {
       ensureRowSchools(row);
-      const product = resolveProduct(row.productId || row.shortcut);
+      const product = resolveProduct(row.productId) || resolveProduct(row.shortcut);
       if (product) {
         row.productId = productKey(product);
         row.shortcut = product.code;
@@ -951,6 +957,7 @@ createApp({
     function clearExcelStaging(keepSummary = false) {
       stagedOrders.value = [];
       quarantinedNewProducts.value = [];
+      quarantinedNewSchools.value = [];
       showNewProductsModal.value = false;
       if (!keepSummary) importSummary.value = null;
       if (excelFileInput.value) excelFileInput.value.value = '';
@@ -958,6 +965,155 @@ createApp({
 
     function resetExcelImport() {
       clearExcelStaging(false);
+    }
+
+    function openSingleSchoolImportModal(schoolId) {
+      singleSchoolImportSchoolId.value = schoolId;
+      singleSchoolImportTab.value = 'file';
+      singleSchoolImportText.value = '';
+      singleSchoolImportModal.value = true;
+    }
+
+    function closeSingleSchoolImportModal() {
+      singleSchoolImportModal.value = false;
+      singleSchoolImportText.value = '';
+      if (singleSchoolImportFileInput.value) singleSchoolImportFileInput.value.value = '';
+    }
+
+    function schoolSlug(value) {
+      return norm(value).normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/đ/g, 'd').replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 32) || `school-${Date.now()}`;
+    }
+
+    function schoolHintFromText(text, fileName = '') {
+      const lines = String(text || '').split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+      const textMatch = lines.map((line) => line.match(/^(?:đơn\s*hàng\s*)?(?:trường|school)\s*[:\-]?\s*(.+)$/i)).find(Boolean);
+      const fileMatch = String(fileName || '').match(/(?:đơn[-_\s]*hàng[-_\s]*)?(?:trường|school)[-_\s]+(.+?)\.(xlsx|xls)$/i);
+      const name = String(textMatch?.[1] || fileMatch?.[1] || '').trim().replace(/\.(xlsx|xls)$/i, '').trim();
+      if (!name) return null;
+      const existing = schoolFromHeader(name);
+      if (existing) return { ref: schoolKey(existing), existing };
+      return { ref: `pending-school-${uid()}`, code: schoolSlug(name), name, bg_color: 'bg-sky-50', text_color: 'text-sky-800', border_color: 'border-sky-200', icon: 'fa-school' };
+    }
+
+    function targetSchoolHint(schoolId, sourceText = '', fileName = '') {
+      if (schoolId) {
+        const school = resolveSchool(schoolId);
+        if (school) return { ref: schoolKey(school), existing: school };
+      }
+      return schoolHintFromText(sourceText, fileName);
+    }
+
+    function stageSingleSchoolRows(importedRows, schoolHint) {
+      if (!schoolHint) throw new Error('Không xác định được trường nhận đơn. Hãy mở nhập từ cột trường hoặc thêm tên trường vào file/văn bản.');
+      if (!schoolHint.existing) {
+        const duplicate = quarantinedNewSchools.value.find((school) => school.ref === schoolHint.ref);
+        if (!duplicate) quarantinedNewSchools.value.push({ ...schoolHint, theme: schoolHint.bg_color });
+      }
+      const records = importedRows.filter((item) => item.code && num(item.qty) > 0).map((item) => ({
+        code: norm(item.code),
+        name: item.name || '',
+        unit: item.unit || '-',
+        price: num(item.price),
+        allocations: { [schoolHint.ref]: round3(num(item.qty)) },
+        productId: resolveProduct(item.code) ? productKey(resolveProduct(item.code)) : ''
+      }));
+      stagedOrders.value.push(...records.filter((item) => item.productId));
+      records.filter((item) => !item.productId).forEach((item) => {
+        const existing = quarantinedNewProducts.value.find((product) => norm(product.code) === item.code && product.schoolRef === schoolHint.ref);
+        if (existing) {
+          existing.allocationRowData[schoolHint.ref] = round3(num(existing.allocationRowData[schoolHint.ref]) + num(item.allocations[schoolHint.ref]));
+          return;
+        }
+        quarantinedNewProducts.value.push({
+          ...item,
+          schoolRef: schoolHint.ref,
+          allocationRowData: { ...item.allocations }
+        });
+      });
+      importSummary.value = {
+        totalRows: (importSummary.value?.totalRows || 0) + records.length,
+        newProducts: quarantinedNewProducts.value.length,
+        newSchools: quarantinedNewSchools.value.length,
+        totalQty: round3((importSummary.value?.totalQty || 0) + records.reduce((sum, item) => sum + num(item.qty || Object.values(item.allocations)[0]), 0)),
+        totalRevenue: Math.round((importSummary.value?.totalRevenue || 0) + records.reduce((sum, item) => sum + num(item.qty || Object.values(item.allocations)[0]) * num(item.price), 0))
+      };
+      if (quarantinedNewProducts.value.length || quarantinedNewSchools.value.length) showNewProductsModal.value = true;
+      else {
+        mergeStagedOrders();
+        closeSingleSchoolImportModal();
+        clearExcelStaging(true);
+        addToast(`Đã nhập ${records.length} dòng cho trường`, 'success');
+      }
+    }
+
+    function parseSingleSchoolText(text, schoolId = '') {
+      const lines = String(text || '').split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+      const schoolHint = targetSchoolHint(schoolId, text);
+      const records = [];
+      lines.forEach((line) => {
+        if (/^(đơn\s*hàng\s*)?(trường|school)\b/i.test(line)) return;
+        const match = line.match(/^([^\s:;,\t]+)\s*(?::|;|\t|\s+)\s*([\d.,]+)/);
+        if (!match) return;
+        records.push({ code: match[1], qty: num(match[2]), name: '', unit: '-', price: 0 });
+      });
+      if (!records.length) throw new Error('Không tìm thấy dòng sản phẩm hợp lệ. Ví dụ: tv 10 hoặc cl: 5');
+      stageSingleSchoolRows(records, schoolHint);
+    }
+
+    function parseSingleSchoolSheet(matrix, fileName, schoolId = '') {
+      if (matrix.length < 2) throw new Error('Tệp Excel không có dữ liệu hàng.');
+      const headers = matrix[0].map((value) => norm(value));
+      const findColumn = (terms, fallback) => headers.findIndex((header) => terms.some((term) => header.includes(term))) >= 0
+        ? headers.findIndex((header) => terms.some((term) => header.includes(term)))
+        : fallback;
+      const codeIndex = findColumn(['mã hàng', 'mã sản phẩm', 'mã', 'code', 'shortcut'], 0);
+      const nameIndex = findColumn(['tên hàng', 'tên sản phẩm', 'tên', 'name'], 1);
+      const unitIndex = findColumn(['đvt', 'đơn vị', 'unit'], 2);
+      const priceIndex = findColumn(['đơn giá', 'giá', 'price'], 3);
+      const qtyIndex = findColumn(['số lượng', 'sl', 'qty', 'quantity'], 4);
+      const sourceText = headers.join(' ');
+      const schoolHint = targetSchoolHint(schoolId, sourceText, fileName);
+      const records = matrix.slice(1).filter((row) => String(row[codeIndex] ?? '').trim()).map((row) => ({
+        code: row[codeIndex],
+        name: String(row[nameIndex] ?? '').trim(),
+        unit: String(row[unitIndex] ?? '').trim() || '-',
+        price: num(row[priceIndex]),
+        qty: num(row[qtyIndex])
+      }));
+      stageSingleSchoolRows(records, schoolHint);
+    }
+
+    async function handleSingleSchoolExcelUpload(event) {
+      const file = event.target.files?.[0];
+      if (!file || !window.XLSX) return;
+      try {
+        const buffer = await file.arrayBuffer();
+        const workbook = window.XLSX.read(buffer, { type: 'array' });
+        const sheet = workbook.Sheets[workbook.SheetNames[0]];
+        const matrix = window.XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
+        parseSingleSchoolSheet(matrix, file.name, singleSchoolImportSchoolId.value);
+        if (!showNewProductsModal.value) closeSingleSchoolImportModal();
+      } catch (error) {
+        logError('handleSingleSchoolExcelUpload', error);
+        addToast(`Không thể đọc đơn trường: ${error.message}`, 'error');
+      }
+    }
+
+    function submitSingleSchoolTextImport() {
+      try {
+        parseSingleSchoolText(singleSchoolImportText.value, singleSchoolImportSchoolId.value);
+        if (!showNewProductsModal.value) closeSingleSchoolImportModal();
+      } catch (error) {
+        logError('submitSingleSchoolTextImport', error);
+        addToast(`Không thể phân tích văn bản: ${error.message}`, 'error');
+      }
+    }
+
+    function applySchoolThemeToReview(school) {
+      const theme = themes.find((item) => item.bg_color === school.theme) || themes[0];
+      school.bg_color = theme.bg_color;
+      school.text_color = theme.text_color;
+      school.border_color = theme.border_color;
     }
 
     function schoolFromHeader(header) {
@@ -1000,7 +1156,10 @@ createApp({
           index: offset + 4,
           school: schoolFromHeader(header)
         })).filter((item) => item.school);
-        if (!schoolColumns.length) throw new Error('Không nhận diện được cột trường học trong hàng tiêu đề.');
+        if (!schoolColumns.length) {
+          parseSingleSchoolSheet(matrix, file.name, '');
+          return;
+        }
 
         const importedRows = matrix.slice(1)
           .filter((row) => String(row[0] ?? '').trim())
@@ -1054,6 +1213,40 @@ createApp({
 
     async function approveNewProductsImport() {
       try {
+        const schoolRefs = new Map();
+        for (const item of quarantinedNewSchools.value) {
+          const code = norm(item.code);
+          const name = String(item.name || '').trim();
+          if (!code || !name) throw new Error('Mỗi điểm trường mới cần có mã và tên.');
+          const response = await saveSchoolApi({
+            code,
+            name,
+            bg_color: item.bg_color,
+            text_color: item.text_color,
+            border_color: item.border_color,
+            icon: item.icon || 'fa-school'
+          });
+          const school = {
+            ...(response || {}),
+            id: response?.id || crypto.randomUUID(),
+            code,
+            name,
+            bg_color: item.bg_color,
+            text_color: item.text_color,
+            border_color: item.border_color,
+            icon: item.icon || 'fa-school'
+          };
+          schools.value.push(school);
+          schoolRefs.set(item.ref, schoolKey(school));
+        }
+        stagedOrders.value.forEach((item) => {
+          Object.entries(item.allocations).forEach(([key, value]) => {
+            if (schoolRefs.has(key)) {
+              item.allocations[schoolRefs.get(key)] = value;
+              delete item.allocations[key];
+            }
+          });
+        });
         const approved = [];
         const approvedCodes = new Set(products.value.map((product) => norm(product.code)));
         for (const item of quarantinedNewProducts.value) {
@@ -1080,22 +1273,31 @@ createApp({
             created_at: today
           };
           products.value.unshift(product);
-          approved.push({ ...item, productId: productKey(product), code: product.code });
+          const allocations = {};
+          Object.entries(item.allocationRowData || item.allocations || {}).forEach(([key, value]) => {
+            allocations[schoolRefs.get(key) || key] = value;
+          });
+          approved.push({ ...item, productId: productKey(product), code: product.code, allocations });
           approvedCodes.add(code);
         }
         stagedOrders.value.push(...approved);
         const newProducts = approved.length;
-        showNewProductsModal.value = false;
+        const newSchools = quarantinedNewSchools.value.length;
         mergeStagedOrders();
         const importedRows = stagedOrders.value;
         importSummary.value = {
-          totalRows: importedRows.length,
+          totalRows: importSummary.value?.totalRows || importedRows.length,
           newProducts,
+          newSchools,
           totalQty: round3(importedRows.reduce((sum, item) => sum + Object.values(item.allocations).reduce((subtotal, value) => subtotal + num(value), 0), 0)),
           totalRevenue: Math.round(importedRows.reduce((sum, item) => sum + Object.values(item.allocations).reduce((subtotal, value) => subtotal + num(value), 0) * num(item.price), 0))
         };
+        const [schoolRows, productRows] = await Promise.all([fetchSchools(), fetchProducts()]);
+        if (Array.isArray(schoolRows) && schoolRows.length) schools.value = schoolRows.map((school) => ({ ...school, code: school.code || school.id }));
+        if (Array.isArray(productRows) && productRows.length) products.value = productRows.map((product) => ({ ...product, code: product.code || product.shortcut || '' }));
         clearExcelStaging(true);
-        addToast(`Đã thêm ${newProducts} mặt hàng và nhập đơn hàng`, 'success');
+        closeSingleSchoolImportModal();
+        addToast(`Đã đăng ký ${newProducts} mặt hàng, ${newSchools} điểm trường và nhập đơn hàng`, 'success');
       } catch (error) {
         logError('approveNewProductsImport', error);
         addToast(`Không thể duyệt mặt hàng mới: ${error.message}`, 'error');
@@ -1341,11 +1543,22 @@ createApp({
       excelFileInput,
       handleExcelUpload,
       quarantinedNewProducts,
+      quarantinedNewSchools,
       showNewProductsModal,
       stagedOrders,
       importSummary,
       approveNewProductsImport,
-      resetExcelImport
+      resetExcelImport,
+      openSingleSchoolImportModal,
+      closeSingleSchoolImportModal,
+      singleSchoolImportModal,
+      singleSchoolImportTab,
+      singleSchoolImportSchoolId,
+      singleSchoolImportText,
+      singleSchoolImportFileInput,
+      handleSingleSchoolExcelUpload,
+      submitSingleSchoolTextImport,
+      applySchoolThemeToReview
     };
   }
 }).mount('#app');
