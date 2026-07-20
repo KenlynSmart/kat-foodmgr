@@ -195,6 +195,7 @@ class AuthUser(BaseModel):
     role: str
     status: str
     vendor_id: Optional[UUID] = None
+    vendor_name: Optional[str] = None
     must_change_password: bool = False
 
 
@@ -232,8 +233,23 @@ def _auth_user_from_row(row: Dict[str, Any]) -> AuthUser:
         role=str(row["role"]),
         status=str(row["status"]),
         vendor_id=UUID(str(row["vendor_id"])) if row.get("vendor_id") else None,
+        vendor_name=row.get("vendor_name"),
         must_change_password=bool(row.get("must_change_password", False)),
     )
+
+
+def _vendor_name_for_id(vendor_id: Optional[str]) -> Optional[str]:
+    if not vendor_id:
+        return None
+    response = (
+        require_read_client()
+        .table("vendors")
+        .select("name")
+        .eq("id", str(vendor_id))
+        .limit(1)
+        .execute()
+    )
+    return str(response.data[0]["name"]) if response.data else None
 
 
 def require_bearer_user(request: Request) -> Dict[str, Any]:
@@ -560,6 +576,7 @@ async def login(credentials: LoginSchema):
         if user["status"] != "active":
             raise HTTPException(status_code=403, detail="Tài khoản đã bị khóa.")
         user["must_change_password"] = pin_matches
+        user["vendor_name"] = _vendor_name_for_id(user.get("vendor_id"))
         return AuthResponse(
             access_token=_create_app_token(user),
             role=user["role"],
@@ -663,6 +680,7 @@ async def current_user(user: Dict[str, Any] = Depends(require_bearer_user)):
             raise HTTPException(status_code=401, detail="Tài khoản không còn tồn tại.")
         record = response.data[0]
         record["must_change_password"] = bool(user.get("must_change_password", False))
+        record["vendor_name"] = _vendor_name_for_id(record.get("vendor_id"))
         return _auth_user_from_row(record)
     except HTTPException:
         raise

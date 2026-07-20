@@ -9,6 +9,7 @@ createApp({
         ? 'https://kat-foodmgr-backend.onrender.com'
         : '');
     const STORAGE_KEY = 'vn-food-v2-state';
+    const ACTIVE_VENDOR_STORAGE_KEY = 'vn-food-active-vendor';
 
     const today = new Date().toISOString().slice(0, 10);
     const clone = (value) => JSON.parse(JSON.stringify(value));
@@ -117,6 +118,7 @@ createApp({
     const lastSyncAt = ref('');
     const isSyncingManual = ref(false);
     const authToken = ref(localStorage.getItem('auth_token') || '');
+    const activeVendorId = ref(localStorage.getItem(ACTIVE_VENDOR_STORAGE_KEY) || '');
     const isAuthenticated = computed(() => Boolean(authToken.value));
     const currentUser = ref(null);
     const users = ref([]);
@@ -839,6 +841,7 @@ createApp({
     });
 
     function persistLocal() {
+      if (!activeVendorId.value) return;
       try {
         localStorage.setItem(STORAGE_KEY, JSON.stringify({
           schools: schools.value,
@@ -851,6 +854,82 @@ createApp({
       } catch (error) {
         logError('persistLocal', error);
       }
+    }
+
+    function clearTransientState() {
+      notifications.value = [];
+      statusBanner.value = '';
+      debugLogs.value = [];
+      currentTab.value = 'matrix';
+      productFilter.value = '';
+      productCategoryFilter.value = '';
+      schoolFilter.value = '';
+      stockFilter.value = '';
+      matrixPage.value = 1;
+      stockPage.value = 1;
+      catalogPage.value = 1;
+      parserText.value = '';
+      parserPreview.value = [];
+      activeEditingCell.value = null;
+      batchPopover.value = { open: false, rowId: '', schoolId: '', position: {} };
+      batchForm.value = { qtyChange: '', notePreset: 'Đợt bổ sung chiều', note: '' };
+      showUserCPModal.value = false;
+      showPasswordOnboarding.value = false;
+      showNewProductsModal.value = false;
+      singleSchoolImportModal.value = false;
+      showCatalogReviewModal.value = false;
+      showSchoolDeleteModal.value = false;
+      showCategoryDeleteModal.value = false;
+      userCPError.value = '';
+      authError.value = '';
+      users.value = [];
+      vendors.value = [];
+      selectedVendorId.value = '';
+      provisionedPin.value = '';
+      vendorForm.value = { code: '', name: '', status: 'active' };
+      vendorUserForm.value = { username: '', nickname: '', role: 'staff', vendor_id: '' };
+      importSummary.value = null;
+      catalogImportSummary.value = null;
+      quarantinedNewProducts.value = [];
+      quarantinedNewSchools.value = [];
+      stagedOrders.value = [];
+    }
+
+    function resetInMemoryDatabase() {
+      rows.value = [emptyRow()];
+      schools.value = clone(defaultSchools);
+      products.value = clone(defaultProducts);
+      categories.value = [];
+      stockMap.value = clone(defaultStock);
+      deliveryDate.value = today;
+      dirtyRows.clear();
+      rows.value.forEach((row) => {
+        schools.value.forEach((school) => {
+          const schoolId = schoolKey(school);
+          row.schoolQtys[schoolId] = 0;
+          row.schoolBatches[schoolId] = [];
+        });
+      });
+    }
+
+    function clearLocalDatabase() {
+      localStorage.removeItem(STORAGE_KEY);
+      localStorage.removeItem(ACTIVE_VENDOR_STORAGE_KEY);
+      resetInMemoryDatabase();
+      clearTransientState();
+    }
+
+    function setActiveVendor(user) {
+      const nextVendorId = user?.vendor_id
+        ? String(user.vendor_id)
+        : user?.role === 'admin'
+          ? `admin:${String(user.id)}`
+          : '';
+      if (activeVendorId.value && nextVendorId && activeVendorId.value !== nextVendorId) {
+        clearLocalDatabase();
+      }
+      activeVendorId.value = nextVendorId;
+      if (nextVendorId) localStorage.setItem(ACTIVE_VENDOR_STORAGE_KEY, nextVendorId);
     }
 
     function hydrateLocal() {
@@ -938,6 +1017,7 @@ createApp({
         if (!authToken.value) {
           throw new Error('Phiên đăng nhập không hợp lệ.');
         }
+        loadInitialState();
         await initializeAuthenticatedState();
         mustChangePassword.value = Boolean(response.must_change_password || currentUser.value?.must_change_password);
         showPasswordOnboarding.value = mustChangePassword.value;
@@ -967,6 +1047,7 @@ createApp({
       if (!authToken.value) return;
       try {
         currentUser.value = await apiJson('/api/auth/me');
+        setActiveVendor(currentUser.value);
         mustChangePassword.value = Boolean(currentUser.value?.must_change_password);
         showPasswordOnboarding.value = mustChangePassword.value;
         if (['admin', 'owner', 'manager'].includes(currentUser.value.role)) {
@@ -1145,6 +1226,7 @@ createApp({
     }
 
     function logout() {
+      clearLocalDatabase();
       authToken.value = '';
       currentUser.value = null;
       users.value = [];
@@ -2534,10 +2616,14 @@ createApp({
 
     onMounted(async () => {
       handleAuthCallback();
-      loadInitialState();
       await loadAuthUser();
-      await initializeAuthenticatedState();
-      setStatus('Sẵn sàng', 'Local cache', 'Chế độ đồng bộ thủ công. Bấm nút Đồng bộ dữ liệu để tải và lưu cloud.');
+      if (authToken.value && currentUser.value) {
+        loadInitialState();
+        await initializeAuthenticatedState();
+        setStatus('Sẵn sàng', 'Local cache', 'Chế độ đồng bộ thủ công. Bấm nút Đồng bộ dữ liệu để tải và lưu cloud.');
+      } else {
+        resetInMemoryDatabase();
+      }
       window.addEventListener('beforeinstallprompt', (event) => {
         event.preventDefault();
         deferredPrompt.value = event;
