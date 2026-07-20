@@ -45,7 +45,7 @@ GOOGLE_OAUTH_REDIRECT_URI = os.environ.get(
     "https://kat-foodmgr-backend.onrender.com/api/auth/google/callback",
 )
 FRONTEND_URL = os.environ.get("FRONTEND_URL", "/")
-password_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 try:
     supabase_read: Optional[Client] = (
@@ -101,8 +101,11 @@ class AuthUser(BaseModel):
 
 
 class AuthResponse(BaseModel):
+    status: str = "success"
     access_token: str
     token_type: str = "bearer"
+    role: str
+    username: str
     user: AuthUser
 
 
@@ -127,47 +130,6 @@ def _auth_user_from_row(row: Dict[str, Any]) -> AuthUser:
         role=str(row["role"]),
         status=str(row["status"]),
     )
-
-
-async def seed_local_users() -> None:
-    if not supabase_write:
-        print("[CẢNH BÁO] Bỏ qua seed users: thiếu SUPABASE_SERVICE_ROLE_KEY.")
-        return
-    try:
-        existing = (
-            supabase_write.table("users")
-            .select("id")
-            .eq("provider", "local")
-            .limit(1)
-            .execute()
-        )
-        if existing.data:
-            return
-        payload = [
-            {
-                "username": "admin",
-                "password": password_context.hash("admin"),
-                "provider": "local",
-                "role": "admin",
-                "status": "active",
-            },
-            {
-                "username": "ktrinh",
-                "password": password_context.hash("ktrinh"),
-                "provider": "local",
-                "role": "staff",
-                "status": "active",
-            },
-        ]
-        supabase_write.table("users").insert(jsonable_encoder(payload)).execute()
-        print("[INFO] Đã seed tài khoản local mặc định.")
-    except Exception as exc:
-        print(f"[CẢNH BÁO] Không thể seed users: {exc}")
-
-
-@app.on_event("startup")
-async def startup_seed_users() -> None:
-    await seed_local_users()
 
 
 def require_bearer_user(request: Request) -> Dict[str, Any]:
@@ -350,12 +312,17 @@ async def login(credentials: LoginSchema):
         if (
             not user
             or not user.get("password")
-            or not password_context.verify(credentials.password, user["password"])
+            or not pwd_context.verify(credentials.password, user["password"])
         ):
             raise HTTPException(status_code=401, detail="Tên đăng nhập hoặc mật khẩu không đúng.")
         if user["status"] != "active":
             raise HTTPException(status_code=403, detail="Tài khoản đã bị khóa.")
-        return AuthResponse(access_token=_create_app_token(user), user=_auth_user_from_row(user))
+        return AuthResponse(
+            access_token=_create_app_token(user),
+            role=user["role"],
+            username=user["username"],
+            user=_auth_user_from_row(user),
+        )
     except HTTPException:
         raise
     except Exception as exc:
