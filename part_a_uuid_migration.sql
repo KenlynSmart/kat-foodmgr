@@ -51,5 +51,5 @@ CREATE TABLE daily_order_batches (
     created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
 );
 
-CREATE INDEX daily_order_batches_order_id_idx
+CREATE INDEX daily_order_batches_daily_order_id_idx
     ON daily_order_batches (daily_order_id, created_at);
