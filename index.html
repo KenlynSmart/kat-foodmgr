@@ -226,8 +226,8 @@
       </section>
 
       <section v-show="currentTab === 'catalog'" class="space-y-6">
-        <div class="grid lg:grid-cols-2 gap-6">
-        <div class="panel space-y-4">
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        <div class="panel lg:col-span-1 space-y-4">
           <div class="flex items-center justify-between gap-3">
             <div>
               <h2 class="section-title">Nhóm hàng</h2>
@@ -279,7 +279,7 @@
             <div class="rounded-xl bg-slate-50 p-3"><div class="text-xs text-slate-500">Theo thời giá</div><strong>{{ catalogImportSummary.marketPriceItems }}</strong></div>
           </div>
         </div>
-        <div class="panel space-y-4">
+        <div class="panel lg:col-span-2 space-y-4">
           <div class="flex items-center justify-between gap-3">
             <div>
               <h2 class="section-title">Danh mục sản phẩm</h2>
@@ -551,8 +551,10 @@
               <tr v-for="item in catalogReviewItems" :key="item.id">
                 <td class="px-3 py-2">{{ item.categoryName }}</td>
                 <td class="px-3 py-2">
-                  <input v-model="item.code" class="input uppercase" :class="item.requiresShortcut && !/^[a-z][a-z0-9_-]*$/i.test(item.code) ? 'border-rose-400 bg-rose-50' : ''" placeholder="shortcut chữ">
-                  <div v-if="item.requiresShortcut" class="mt-1 text-xs text-rose-600">Mã số/trống: bắt buộc đổi thành mã chữ.</div>
+                  <input v-model="item.code" @input="item.code = item.code.trim().toLowerCase()" class="input uppercase" :class="catalogImportInvalidItems.includes(item) ? 'border-rose-400 bg-rose-50' : ''" placeholder="shortcut chữ">
+                  <div v-if="catalogImportInvalidItems.includes(item)" class="mt-1 text-xs text-rose-600">
+                    {{ !/^[a-z][a-z0-9_-]*$/i.test(item.code) ? 'Mã số/trống: bắt buộc dùng mã chữ.' : 'Shortcut bị trùng hoặc đã tồn tại.' }}
+                  </div>
                 </td>
                 <td class="px-3 py-2"><input v-model="item.name" class="input"></td>
                 <td class="px-3 py-2"><input v-model="item.unit" class="input"></td>
@@ -565,9 +567,12 @@
             </tbody>
           </table>
         </div>
+        <div v-if="catalogReviewItems.length && !catalogImportReady" class="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">
+          Mã số/trống hoặc mã trùng: bắt buộc chuẩn hóa shortcut trước khi gửi.
+        </div>
         <div class="flex justify-end gap-2">
           <button @click="resetCatalogImport()" class="btn-secondary">Hủy nhập</button>
-          <button @click="approveCatalogImport" class="btn-primary">Xác Nhận Thêm Toàn Bộ Danh Mục</button>
+          <button @click="approveCatalogImport" :disabled="!catalogImportReady" class="btn-primary disabled:opacity-50">Xác Nhận Thêm Toàn Bộ Danh Mục</button>
         </div>
       </div>
     </div>

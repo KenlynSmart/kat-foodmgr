@@ -145,6 +145,20 @@ createApp({
     const catalogReviewCategories = ref([]);
     const catalogImportSummary = ref(null);
 
+    function generateShortcutFromName(name) {
+      if (!name) return '';
+      return String(name)
+        .toLowerCase()
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .replace(/[đĐ]/g, 'd')
+        .split(/[\s,.\-/]+/)
+        .filter(Boolean)
+        .map((word) => word.charAt(0))
+        .join('')
+        .replace(/[^a-z0-9]/g, '');
+    }
+
     let syncing = false;
     let applyingRemote = false;
     let skipNextSync = false;
@@ -495,6 +509,23 @@ createApp({
     }
 
     const categoryName = (categoryId) => categories.value.find((category) => String(category.id) === String(categoryId))?.name || 'Chưa phân nhóm';
+
+    const catalogImportInvalidItems = computed(() => {
+      const counts = new Map();
+      catalogReviewItems.value.forEach((item) => {
+        const code = norm(item.code);
+        counts.set(code, (counts.get(code) || 0) + 1);
+      });
+      return catalogReviewItems.value.filter((item) => {
+        const code = norm(item.code);
+        const formatInvalid = !/^[a-z][a-z0-9_-]*$/i.test(code);
+        const duplicateStaged = Boolean(code) && counts.get(code) > 1;
+        const existing = products.value.find((product) => norm(product.code) === code);
+        const existingConflict = Boolean(existing && String(existing.id || '') !== String(item.existingProductId || ''));
+        return formatInvalid || duplicateStaged || existingConflict;
+      });
+    });
+    const catalogImportReady = computed(() => catalogReviewItems.value.length > 0 && catalogImportInvalidItems.value.length === 0);
 
     const filteredSchools = computed(() => {
       const q = norm(schoolFilter.value);
@@ -1370,10 +1401,11 @@ createApp({
         const cleanedCode = norm(codeRaw);
         const requiresShortcut = !cleanedCode || /^\d+(?:[.,]\d+)?$/.test(cleanedCode);
         const product = !requiresShortcut ? resolveProduct(cleanedCode) : null;
+        const suggestedCode = requiresShortcut ? generateShortcutFromName(nameRaw) : cleanedCode;
         parsed.push({
           id: `catalog-row-${index}`,
           originalCode: codeRaw,
-          code: requiresShortcut ? '' : cleanedCode,
+          code: suggestedCode,
           name: nameRaw,
           unit: unitRaw,
           price: priceInfo.price,
@@ -1381,7 +1413,8 @@ createApp({
           categoryName: currentCategoryName || 'Chưa phân nhóm',
           category_id: product?.category_id || '',
           existingProductId: product ? productKey(product) : '',
-          requiresShortcut
+          requiresShortcut,
+          suggestedShortcut: requiresShortcut
         });
       });
       if (!parsed.length) throw new Error('Không nhận diện được dòng sản phẩm. Hãy kiểm tra cột ĐVT.');
@@ -1426,6 +1459,7 @@ createApp({
 
     async function approveCatalogImport() {
       try {
+        if (!catalogImportReady.value) throw new Error('Mã số/trống hoặc mã trùng: hãy kiểm tra lại shortcut trong bảng duyệt.');
         const categoryIds = new Map();
         for (const category of catalogReviewCategories.value) {
           const name = category.name.trim();
@@ -1972,6 +2006,8 @@ createApp({
       catalogReviewItems,
       catalogReviewCategories,
       catalogImportSummary,
+      catalogImportInvalidItems,
+      catalogImportReady,
       handleCatalogExcelUpload,
       resetCatalogImport,
       approveCatalogImport
