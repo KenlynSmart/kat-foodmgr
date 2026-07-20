@@ -97,11 +97,22 @@
             <button @click="copyDebugLogs" class="btn-ghost">Sao chép log</button>
           </div>
         </div>
-        <nav class="flex gap-1 overflow-x-auto pb-1">
-          <button v-for="tab in visibleTabs" :key="tab.id" @click="currentTab = tab.id" class="tab-btn" :class="currentTab === tab.id ? 'tab-btn-active' : ''">
-            <i class="mr-2" :class="tab.icon"></i>{{ tab.label }}
+      </div>
+      <div class="bg-emerald-800/50 backdrop-blur border-t border-emerald-700/30 px-4 py-2 flex flex-wrap gap-2 items-center">
+        <template v-if="isAdmin">
+          <button v-for="tab in adminTabs" :key="tab.id" @click="currentTab = tab.id"
+            class="px-3 py-1.5 rounded-lg text-sm font-semibold transition flex items-center gap-2"
+            :class="currentTab === tab.id ? 'bg-white text-emerald-900 shadow-sm' : 'text-emerald-100 hover:bg-emerald-700/50'">
+            <i :class="tab.icon"></i>{{ tab.label }}
           </button>
-        </nav>
+        </template>
+        <template v-else>
+          <button v-for="tab in tabs" :key="tab.id" @click="currentTab = tab.id"
+            class="px-3 py-1.5 rounded-lg text-sm font-semibold transition flex items-center gap-2"
+            :class="currentTab === tab.id ? 'bg-white text-emerald-900 shadow-sm' : 'text-emerald-100 hover:bg-emerald-700/50'">
+            <i :class="tab.icon"></i>{{ tab.label }}
+          </button>
+        </template>
       </div>
     </header>
 
