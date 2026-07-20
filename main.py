@@ -1,3 +1,4 @@
+import asyncio
 import os
 import secrets
 from pathlib import Path
@@ -52,6 +53,7 @@ GOOGLE_OAUTH_REDIRECT_URI = os.environ.get(
 )
 FRONTEND_URL = os.environ.get("FRONTEND_URL", "/")
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+BULK_CHUNK_SIZE = 100
 
 try:
     supabase_read: Optional[Client] = (
@@ -90,6 +92,23 @@ def require_read_client() -> Client:
             detail="Supabase read client chưa được cấu hình.",
         )
     return supabase_read
+
+
+def _chunks(items: List[Dict[str, Any]]) -> List[List[Dict[str, Any]]]:
+    return [
+        items[index:index + BULK_CHUNK_SIZE]
+        for index in range(0, len(items), BULK_CHUNK_SIZE)
+    ]
+
+
+def _run_upsert_chunk(
+    client: Client,
+    table: str,
+    payload: List[Dict[str, Any]],
+    conflict_column: str,
+) -> List[Dict[str, Any]]:
+    response = client.table(table).upsert(payload, on_conflict=conflict_column).execute()
+    return response.data or []
 
 
 class LoginSchema(BaseModel):
@@ -386,6 +405,48 @@ def _sync_order_batches(client: Client, daily_order_id: str, batches: List[Dict[
     ]
     if payload:
         client.table("daily_order_batches").insert(payload).execute()
+
+
+def _process_order_chunk(
+    client: Client,
+    raw_items: List[Dict[str, Any]],
+) -> Dict[str, int]:
+    upsert_payload: List[Dict[str, Any]] = []
+    delete_payload: List[Dict[str, Any]] = []
+    for item in raw_items:
+        normalised = _normalise_order_payload(item)
+        (delete_payload if normalised["qty"] <= 0 and not normalised["batches"] else upsert_payload).append(normalised)
+
+    upserted_count = 0
+    if upsert_payload:
+        response = client.table("daily_orders").upsert(
+            [{key: value for key, value in item.items() if key != "batches"} for item in upsert_payload],
+            on_conflict="delivery_date,product_id,school_id",
+        ).execute()
+        parents = response.data or []
+        upserted_count = len(parents)
+        parents_by_key = {
+            (
+                str(parent["delivery_date"]),
+                str(parent["product_id"]),
+                str(parent["school_id"]),
+            ): parent
+            for parent in parents
+        }
+        for item in upsert_payload:
+            key = (item["delivery_date"], str(item["product_id"]), str(item["school_id"]))
+            _sync_order_batches(client, str(parents_by_key[key]["id"]), item["batches"])
+
+    deleted_count = 0
+    for item in delete_payload:
+        client.table("daily_orders").delete() \
+            .eq("delivery_date", item["delivery_date"]) \
+            .eq("product_id", item["product_id"]) \
+            .eq("school_id", item["school_id"]) \
+            .execute()
+        deleted_count += 1
+
+    return {"upserted_count": upserted_count, "deleted_count": deleted_count}
 
 
 @app.post("/api/auth/login", response_model=AuthResponse)
@@ -794,16 +855,15 @@ async def bulk_upsert_categories(categories_list: List[CategorySchemaWithId]):
             item["name"] = item["name"].strip()
             if not item["name"]:
                 raise HTTPException(status_code=422, detail="Tên nhóm hàng không được để trống.")
-        response = (
-            require_write_client()
-            .table("categories")
-            .upsert(payload, on_conflict="id")
-            .execute()
-        )
+        client = require_write_client()
+        data = []
+        for chunk in _chunks(payload):
+            data.extend(await asyncio.to_thread(_run_upsert_chunk, client, "categories", chunk, "id"))
+            await asyncio.sleep(0)
         return {
             "status": "success",
-            "upserted_count": len(response.data or []),
-            "data": response.data or [],
+            "upserted_count": len(data),
+            "data": data,
         }
     except HTTPException:
         raise
@@ -835,16 +895,15 @@ async def create_products_bulk(products_list: List[ProductSchema]):
         payload = jsonable_encoder(products_list)
         for item in payload:
             item["code"] = _code(item["code"])
-        response = (
-            require_write_client()
-            .table("products")
-            .upsert(payload, on_conflict="code")
-            .execute()
-        )
+        client = require_write_client()
+        data = []
+        for chunk in _chunks(payload):
+            data.extend(await asyncio.to_thread(_run_upsert_chunk, client, "products", chunk, "code"))
+            await asyncio.sleep(0)
         return {
             "status": "success",
-            "inserted_count": len(response.data or []),
-            "data": response.data or [],
+            "inserted_count": len(data),
+            "data": data,
         }
     except HTTPException:
         raise
@@ -863,16 +922,15 @@ async def bulk_upsert_products(products_list: List[ProductSchemaWithId]):
         payload = jsonable_encoder(products_list)
         for item in payload:
             item["code"] = _code(item["code"])
-        response = (
-            require_write_client()
-            .table("products")
-            .upsert(payload, on_conflict="id")
-            .execute()
-        )
+        client = require_write_client()
+        data = []
+        for chunk in _chunks(payload):
+            data.extend(await asyncio.to_thread(_run_upsert_chunk, client, "products", chunk, "id"))
+            await asyncio.sleep(0)
         return {
             "status": "success",
-            "upserted_count": len(response.data or []),
-            "data": response.data or [],
+            "upserted_count": len(data),
+            "data": data,
         }
     except HTTPException:
         raise
@@ -1000,45 +1058,21 @@ async def bulk_upsert_daily_orders(orders_list: List[OrderUpsertSchema]):
         }
     try:
         payload = jsonable_encoder(orders_list)
-        upsert_payload = []
-        delete_payload = []
-        for item in payload:
-            normalised = _normalise_order_payload(item)
-            (delete_payload if normalised["qty"] <= 0 and not normalised["batches"] else upsert_payload).append(normalised)
-
         client = require_write_client()
         upserted_count = 0
-        if upsert_payload:
-            response = client.table("daily_orders").upsert(
-                [{key: value for key, value in item.items() if key != "batches"} for item in upsert_payload],
-                on_conflict="delivery_date,product_id,school_id",
-            ).execute()
-            upserted_count = len(response.data or [])
-            parents_by_key = {
-                (
-                    str(parent["delivery_date"]),
-                    str(parent["product_id"]),
-                    str(parent["school_id"]),
-                ): parent
-                for parent in response.data or []
-            }
-            for item in upsert_payload:
-                key = (item["delivery_date"], str(item["product_id"]), str(item["school_id"]))
-                parent = parents_by_key[key]
-                _sync_order_batches(client, str(parent["id"]), item["batches"])
-
         deleted_count = 0
-        for item in delete_payload:
-            client.table("daily_orders").delete() \
-                .eq("delivery_date", item["delivery_date"]) \
-                .eq("product_id", item["product_id"]) \
-                .eq("school_id", item["school_id"]) \
-                .execute()
-            deleted_count += 1
+        processed_chunks = 0
+        for chunk in _chunks(payload):
+            result = await asyncio.to_thread(_process_order_chunk, client, chunk)
+            upserted_count += result["upserted_count"]
+            deleted_count += result["deleted_count"]
+            processed_chunks += 1
+            await asyncio.sleep(0)
         return {
             "status": "success",
             "upserted_count": upserted_count,
             "deleted_count": deleted_count,
+            "processed_chunks": processed_chunks,
         }
     except HTTPException:
         raise
