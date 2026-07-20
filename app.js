@@ -41,18 +41,6 @@ createApp({
       { id: uid(), code: 'lcTre', name: 'Trường mầm non Lộc Trẻ', bg_color: 'bg-amber-50', text_color: 'text-amber-800', border_color: 'border-amber-200', icon: 'fa-bowl-rice', created_at: today },
       { id: uid(), code: 'sunKid', name: 'Trường mầm non Sun Kid', bg_color: 'bg-violet-50', text_color: 'text-violet-800', border_color: 'border-violet-200', icon: 'fa-apple-whole', created_at: today }
     ];
-    const defaultProducts = [
-      { id: uid(), code: 'tv', name: 'Thịt vai heo VietGap', unit: 'Kg', price: 128000, created_at: today },
-      { id: uid(), code: 'cl', name: 'Cải lá xanh', unit: 'Kg', price: 18000, created_at: today },
-      { id: uid(), code: 'hl', name: 'Hàu sữa', unit: 'Kg', price: 96000, created_at: today },
-      { id: uid(), code: 'tr', name: 'Trứng gà', unit: 'Quả', price: 3000, created_at: today },
-      { id: uid(), code: 'sua', name: 'Sữa tươi', unit: 'Lít', price: 28000, created_at: today }
-    ];
-    const defaultStock = {};
-    defaultProducts.forEach((product, index) => {
-      defaultStock[product.id] = [3.5, 8, 2, 100, 12][index];
-    });
-
     const emptyRow = () => ({
       id: uid(),
       isDirty: false,
@@ -76,9 +64,8 @@ createApp({
     const state = {
       rows: [emptyRow()],
       schools: clone(defaultSchools),
-      products: clone(defaultProducts),
       categories: [],
-      stockMap: clone(defaultStock),
+      stockMap: {},
       deliveryDate: today
     };
 
@@ -96,7 +83,7 @@ createApp({
     const currentTab = ref('matrix');
     const rows = ref(state.rows);
     const schools = ref(state.schools);
-    const products = ref(state.products);
+    const products = ref([]);
     const categories = ref(state.categories || []);
     const stockMap = ref(state.stockMap);
     const deliveryDate = ref(state.deliveryDate);
@@ -898,9 +885,9 @@ createApp({
     function resetInMemoryDatabase() {
       rows.value = [emptyRow()];
       schools.value = clone(defaultSchools);
-      products.value = clone(defaultProducts);
+      products.value = [];
       categories.value = [];
-      stockMap.value = clone(defaultStock);
+      stockMap.value = {};
       deliveryDate.value = today;
       dirtyRows.clear();
       rows.value.forEach((row) => {
@@ -938,8 +925,8 @@ createApp({
         if (!raw) {
           rows.value = [emptyRow()];
           schools.value = clone(defaultSchools);
-          products.value = clone(defaultProducts);
-          stockMap.value = clone(defaultStock);
+          products.value = [];
+          stockMap.value = {};
           rows.value.forEach((row) => {
             schools.value.forEach((school) => {
               const schoolId = schoolKey(school);
@@ -951,7 +938,7 @@ createApp({
         }
         const parsed = JSON.parse(raw);
         if (Array.isArray(parsed.schools) && parsed.schools.length) schools.value = parsed.schools;
-        if (Array.isArray(parsed.products) && parsed.products.length) products.value = parsed.products;
+        if (Array.isArray(parsed.products)) products.value = parsed.products;
         if (Array.isArray(parsed.categories)) categories.value = parsed.categories;
         if (parsed.stockMap && typeof parsed.stockMap === 'object') stockMap.value = normalizeStockMap(parsed.stockMap);
         if (Array.isArray(parsed.rows) && parsed.rows.length) rows.value = parsed.rows;
@@ -1415,30 +1402,34 @@ createApp({
           byId.forEach((school) => nextSchools.push(school));
           schools.value = nextSchools;
         }
-        if (Array.isArray(productRows) && productRows.length) {
-          const byId = new Map(productRows.map((product) => {
-            const next = {
-              ...product,
-              code: product.code || product.shortcut || '',
-              id: product.id || crypto.randomUUID(),
-              isDirty: false
-            };
-            return [productKey(next), next];
-          }));
-          const nextProducts = [];
-          products.value.forEach((localProduct) => {
-            const key = productKey(localProduct);
-            const incoming = byId.get(key);
-            const isLocked = false;
-            if (incoming) {
-              nextProducts.push(incoming);
-              byId.delete(key);
-              return;
-            }
-            if (!key || isLocked) nextProducts.push(localProduct);
-          });
-          byId.forEach((product) => nextProducts.push(product));
-          products.value = nextProducts;
+        if (Array.isArray(productRows)) {
+          if (!productRows.length) {
+            products.value = [];
+          } else {
+            const byId = new Map(productRows.map((product) => {
+              const next = {
+                ...product,
+                code: product.code || product.shortcut || '',
+                id: product.id || crypto.randomUUID(),
+                isDirty: false
+              };
+              return [productKey(next), next];
+            }));
+            const nextProducts = [];
+            products.value.forEach((localProduct) => {
+              const key = productKey(localProduct);
+              const incoming = byId.get(key);
+              const isLocked = false;
+              if (incoming) {
+                nextProducts.push(incoming);
+                byId.delete(key);
+                return;
+              }
+              if (!key || isLocked) nextProducts.push(localProduct);
+            });
+            byId.forEach((product) => nextProducts.push(product));
+            products.value = nextProducts;
+          }
         }
         if (Array.isArray(categoryRows)) {
           applyCategoryRows(categoryRows);
@@ -2469,7 +2460,7 @@ createApp({
         };
         const [schoolRows, productRows] = await Promise.all([fetchSchools(), fetchProducts()]);
         if (Array.isArray(schoolRows) && schoolRows.length) schools.value = schoolRows.map((school) => ({ ...school, code: school.code || school.id }));
-        if (Array.isArray(productRows) && productRows.length) products.value = productRows.map((product) => ({ ...product, code: product.code || product.shortcut || '' }));
+        if (Array.isArray(productRows)) products.value = productRows.map((product) => ({ ...product, code: product.code || product.shortcut || '' }));
         clearExcelStaging(true);
         closeSingleSchoolImportModal();
         addToast(`Đã đăng ký ${newProducts} mặt hàng, ${newSchools} điểm trường và nhập đơn hàng`, 'success');
