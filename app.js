@@ -108,7 +108,28 @@ createApp({
     const selectedVendorId = ref('');
     const vendorForm = ref({ code: '', name: '', status: 'active' });
     const vendorSaving = ref(false);
+    const editingVendorId = ref('');
     const isAdmin = computed(() => currentUser.value?.role === 'admin');
+    const visibleTabs = computed(() => isAdmin.value ? adminTabs : tabs);
+    const subscriptionCodes = ref([]);
+    const subscriptionMetrics = ref({ total_revenue: 0, active_paid_vendors: 0, generated_codes: 0, used_codes: 0 });
+    const subscriptionCodeForm = ref({ duration_months: 1, price_allocated: 0 });
+    const subscriptionCodeGenerating = ref(false);
+    const renewalCode = ref('');
+    const redeemingCode = ref(false);
+    const subscriptionWarning = computed(() => {
+      const dueDate = currentUser.value?.subscription_due_date;
+      if (isAdmin.value || !dueDate) return null;
+      const due = new Date(`${dueDate}T00:00:00`);
+      const todayDate = new Date();
+      todayDate.setHours(0, 0, 0, 0);
+      const remainingDays = Math.ceil((due.getTime() - todayDate.getTime()) / 86400000);
+      if (remainingDays > 15) return null;
+      return {
+        remainingDays: Math.max(remainingDays, 0),
+        dueDate: new Intl.DateTimeFormat('vi-VN').format(due)
+      };
+    });
     const userRole = computed(() => currentUser.value?.role || 'staff');
     const canManageCatalog = computed(() => ['admin', 'owner', 'manager'].includes(userRole.value));
     const canMutate = computed(() => userRole.value !== 'report-viewer');
@@ -202,6 +223,12 @@ createApp({
       { id: 'analytics', label: 'Báo Cáo Thống Kê', icon: 'fa-solid fa-chart-pie' },
       { id: 'receipts', label: 'Biên bản in', icon: 'fa-solid fa-print' },
       { id: 'debug', label: 'Debug', icon: 'fa-solid fa-terminal' }
+    ];
+    const adminTabs = [
+      { id: 'admin-vendors', label: 'Quản lý Vendor', icon: 'fa-solid fa-building-shield' },
+      { id: 'admin-members', label: 'Quản lý Thành viên', icon: 'fa-solid fa-users-gear' },
+      { id: 'admin-subscriptions', label: 'Quản lý Gói Dịch Vụ', icon: 'fa-solid fa-key' },
+      { id: 'admin-revenue', label: 'Doanh Thu Nền Tảng', icon: 'fa-solid fa-chart-line' }
     ];
 
     const analyticsRange = ref('day');
@@ -1007,8 +1034,10 @@ createApp({
         if (!authToken.value) {
           throw new Error('Phiên đăng nhập không hợp lệ.');
         }
-        loadInitialState();
-        await initializeAuthenticatedState();
+        if (!isAdmin.value) {
+          loadInitialState();
+          await initializeAuthenticatedState();
+        }
         mustChangePassword.value = Boolean(response.must_change_password || currentUser.value?.must_change_password);
         showPasswordOnboarding.value = mustChangePassword.value;
         addToast(`Xin chào ${response.user.username}`, 'success');
@@ -1042,6 +1071,7 @@ createApp({
         showPasswordOnboarding.value = mustChangePassword.value;
         if (['admin', 'owner', 'manager'].includes(currentUser.value.role)) {
           if (currentUser.value.role === 'admin') {
+            currentTab.value = 'admin-vendors';
             vendors.value = await apiJson('/api/vendors');
             selectedVendorId.value = vendors.value[0]?.id || '';
           } else {
@@ -1049,6 +1079,7 @@ createApp({
           }
           userListLoading.value = true;
           users.value = await apiJson('/api/auth/users');
+          if (currentUser.value.role === 'admin') await loadAdminSubscriptionData();
         }
         return true;
       } catch (error) {
@@ -1057,6 +1088,56 @@ createApp({
         return false;
       } finally {
         userListLoading.value = false;
+      }
+    }
+
+    async function loadAdminSubscriptionData() {
+      try {
+        const [codes, metrics] = await Promise.all([
+          apiJson('/api/admin/subscription-codes'),
+          apiJson('/api/admin/subscription-metrics')
+        ]);
+        subscriptionCodes.value = Array.isArray(codes) ? codes : [];
+        subscriptionMetrics.value = metrics || subscriptionMetrics.value;
+      } catch (error) {
+        logError('loadAdminSubscriptionData', error);
+      }
+    }
+
+    async function generateSubscriptionCode() {
+      if (subscriptionCodeGenerating.value) return;
+      subscriptionCodeGenerating.value = true;
+      try {
+        const created = await apiJson('/api/admin/subscription-codes', {
+          method: 'POST',
+          body: JSON.stringify(subscriptionCodeForm.value)
+        });
+        subscriptionCodes.value = [created, ...subscriptionCodes.value];
+        subscriptionCodeForm.value = { duration_months: 1, price_allocated: 0 };
+        subscriptionMetrics.value.generated_codes += 1;
+        addToast('Đã tạo mã gia hạn mới.', 'success');
+      } catch (error) {
+        addToast(error.message || 'Không thể tạo mã gia hạn.', 'error');
+      } finally {
+        subscriptionCodeGenerating.value = false;
+      }
+    }
+
+    async function redeemSubscriptionCode() {
+      if (redeemingCode.value || !renewalCode.value.trim()) return;
+      redeemingCode.value = true;
+      userCPError.value = '';
+      try {
+        currentUser.value = await apiJson('/api/auth/redeem-code', {
+          method: 'POST',
+          body: JSON.stringify({ code: renewalCode.value })
+        });
+        renewalCode.value = '';
+        addToast('Đã gia hạn gói dịch vụ thành công.', 'success');
+      } catch (error) {
+        userCPError.value = error.message || 'Mã gia hạn không hợp lệ.';
+      } finally {
+        redeemingCode.value = false;
       }
     }
 
@@ -1132,6 +1213,36 @@ createApp({
       } finally {
         vendorSaving.value = false;
       }
+    }
+
+    function editVendor(vendor) {
+      editingVendorId.value = vendor.id;
+      vendorForm.value = { code: vendor.code || '', name: vendor.name || '', status: vendor.status || 'active' };
+    }
+
+    async function saveVendor() {
+      if (editingVendorId.value) {
+        if (vendorSaving.value) return;
+        vendorSaving.value = true;
+        userCPError.value = '';
+        try {
+          const updated = await apiJson(`/api/vendors/${encodeURIComponent(editingVendorId.value)}`, {
+            method: 'PUT',
+            body: JSON.stringify(vendorForm.value)
+          });
+          const index = vendors.value.findIndex((vendor) => vendor.id === updated.id);
+          if (index >= 0) vendors.value[index] = updated;
+          editingVendorId.value = '';
+          vendorForm.value = { code: '', name: '', status: 'active' };
+          addToast('Đã cập nhật vendor.', 'success');
+        } catch (error) {
+          userCPError.value = error.message || 'Không thể cập nhật vendor.';
+        } finally {
+          vendorSaving.value = false;
+        }
+        return;
+      }
+      await createVendor();
     }
 
     async function selectVendor(vendorId) {
@@ -2616,9 +2727,13 @@ createApp({
       handleAuthCallback();
       await loadAuthUser();
       if (authToken.value && currentUser.value) {
-        loadInitialState();
-        await initializeAuthenticatedState();
-        setStatus('Sẵn sàng', 'Local cache', 'Chế độ đồng bộ thủ công. Bấm nút Đồng bộ dữ liệu để tải và lưu cloud.');
+        if (!isAdmin.value) {
+          loadInitialState();
+          await initializeAuthenticatedState();
+          setStatus('Sẵn sàng', 'Local cache', 'Chế độ đồng bộ thủ công. Bấm nút Đồng bộ dữ liệu để tải và lưu cloud.');
+        } else {
+          setStatus('Sẵn sàng', 'System Admin', 'Chế độ quản trị hệ thống.');
+        }
       } else {
         resetInMemoryDatabase();
       }
@@ -2665,6 +2780,7 @@ createApp({
 
     return {
       tabs,
+      visibleTabs,
       currentTab,
       deliveryDate,
       changeDeliveryDate,
@@ -2708,6 +2824,9 @@ createApp({
       selectedVendorId,
       vendorForm,
       vendorSaving,
+      editingVendorId,
+      editVendor,
+      saveVendor,
       isAdmin,
       userRole,
       canManageCatalog,
@@ -2717,6 +2836,15 @@ createApp({
       vendorUserForm,
       vendorUserProvisioning,
       provisionedPin,
+      subscriptionCodes,
+      subscriptionMetrics,
+      subscriptionCodeForm,
+      subscriptionCodeGenerating,
+      generateSubscriptionCode,
+      renewalCode,
+      redeemingCode,
+      redeemSubscriptionCode,
+      subscriptionWarning,
       loginForm,
       authError,
       isLoggingIn,
