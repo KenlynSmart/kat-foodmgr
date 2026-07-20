@@ -6,6 +6,17 @@ body {
   display: none !important;
 }
 
+.notification-enter-active,
+.notification-leave-active {
+  transition: opacity .18s ease, transform .18s ease;
+}
+
+.notification-enter-from,
+.notification-leave-to {
+  opacity: 0;
+  transform: translateY(-0.35rem);
+}
+
 ::-webkit-scrollbar {
   width: 8px;
   height: 8px;
