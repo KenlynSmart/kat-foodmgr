@@ -219,19 +219,73 @@
       </section>
 
       <section v-show="currentTab === 'catalog'" class="space-y-6">
+        <div class="grid lg:grid-cols-2 gap-6">
         <div class="panel space-y-4">
           <div class="flex items-center justify-between gap-3">
             <div>
-              <h2 class="section-title">Danh mục products</h2>
-              <p class="section-subtitle">Đồng bộ 2 chiều với backend và lưu local dự phòng.</p>
+              <h2 class="section-title">Nhóm hàng</h2>
+              <p class="section-subtitle">Tạo, sửa và xóa nhóm sản phẩm. Xóa nhóm chỉ đặt category_id về NULL.</p>
+            </div>
+            <input v-model="categoryFilter" class="input w-44" placeholder="Tìm nhóm">
+          </div>
+          <div class="flex gap-2">
+            <input v-model="categoryForm.name" class="input" placeholder="Tên nhóm hàng">
+            <button @click="saveCategory" class="btn-primary whitespace-nowrap">Thêm nhóm</button>
+          </div>
+          <div class="overflow-x-auto">
+            <table class="min-w-full text-sm">
+              <thead class="thead"><tr><th class="th">Tên nhóm</th><th class="th text-right">Thao tác</th></tr></thead>
+              <tbody class="divide-y divide-slate-100">
+                <tr v-for="category in filteredCategories" :key="category.id">
+                  <td class="px-3 py-2">
+                    <input v-if="editingCategoryId === category.id" v-model="categoryDraftName" class="input">
+                    <span v-else class="font-semibold">{{ category.name }}</span>
+                  </td>
+                  <td class="px-3 py-2 text-right whitespace-nowrap">
+                    <template v-if="editingCategoryId === category.id">
+                      <button @click="updateCategory(category)" class="text-emerald-700 mr-2">Lưu</button>
+                      <button @click="cancelCategoryEdit" class="text-slate-500 mr-2">Hủy</button>
+                    </template>
+                    <template v-else>
+                      <button @click="editCategory(category)" class="text-emerald-700 mr-2">Sửa</button>
+                      <button @click="promptDeleteCategory(category)" class="text-rose-600">Xóa</button>
+                    </template>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <div class="rounded-2xl border-2 border-dashed border-emerald-200 bg-emerald-50/40 p-5 text-center">
+            <i class="fa-solid fa-file-excel text-2xl text-emerald-600"></i>
+            <div class="mt-2 font-semibold">Nạp Danh Mục Báo Giá Mới (.xlsx)</div>
+            <div class="mt-1 text-xs text-slate-500">Tự nhận diện nhóm, mã hàng số, giá thị trường và đơn vị tính.</div>
+            <label for="catalog-excel-input" class="btn-primary mt-3 inline-block cursor-pointer">Chọn tệp báo giá</label>
+            <input ref="catalogFileInput" id="catalog-excel-input" type="file" accept=".xlsx,.xls" @change="handleCatalogExcelUpload" class="hidden">
+          </div>
+          <div v-if="catalogImportSummary" class="grid grid-cols-2 gap-2 text-sm">
+            <div class="rounded-xl bg-slate-50 p-3"><div class="text-xs text-slate-500">Dòng đã đọc</div><strong>{{ catalogImportSummary.totalRows }}</strong></div>
+            <div class="rounded-xl bg-slate-50 p-3"><div class="text-xs text-slate-500">Nhóm hàng</div><strong>{{ catalogImportSummary.totalCategories }}</strong></div>
+            <div class="rounded-xl bg-slate-50 p-3"><div class="text-xs text-slate-500">Mặt hàng mới</div><strong>{{ catalogImportSummary.newItems }}</strong></div>
+            <div class="rounded-xl bg-slate-50 p-3"><div class="text-xs text-slate-500">Theo thời giá</div><strong>{{ catalogImportSummary.marketPriceItems }}</strong></div>
+          </div>
+        </div>
+        <div class="panel space-y-4">
+          <div class="flex items-center justify-between gap-3">
+            <div>
+              <h2 class="section-title">Danh mục sản phẩm</h2>
+              <p class="section-subtitle">Sắp xếp theo nhóm hàng, mã tắt và giá hiện hành.</p>
             </div>
             <input v-model="productFilter" class="input w-56" placeholder="Tìm mã/tên">
           </div>
-          <div class="grid sm:grid-cols-4 gap-2">
+          <div class="grid sm:grid-cols-5 gap-2">
             <input v-model="productForm.code" :disabled="editingProduct" class="input uppercase" placeholder="code">
             <input v-model="productForm.name" class="input" placeholder="name">
             <input v-model="productForm.unit" class="input" placeholder="unit">
             <input v-model.number="productForm.price" type="number" min="0" class="input" placeholder="price">
+            <select v-model="productForm.category_id" class="input">
+              <option value="">Chưa phân nhóm</option>
+              <option v-for="category in categories" :key="category.id" :value="category.id">{{ category.name }}</option>
+            </select>
           </div>
           <div class="flex gap-2">
             <button @click="saveProduct" class="btn-primary">{{ editingProduct ? 'Cập nhật' : 'Thêm' }}</button>
@@ -240,10 +294,11 @@
           <div class="overflow-x-auto">
             <table class="min-w-full text-sm">
               <thead class="thead">
-                <tr><th class="th">Code</th><th class="th">Tên</th><th class="th">ĐVT</th><th class="th text-right">Giá</th><th class="th"></th></tr>
+                <tr><th class="th">Nhóm</th><th class="th">Code</th><th class="th">Tên</th><th class="th">ĐVT</th><th class="th text-right">Giá</th><th class="th"></th></tr>
               </thead>
               <tbody class="divide-y divide-slate-100">
                 <tr v-for="product in filteredProducts" :key="product.code">
+                  <td class="px-3 py-2"><span class="rounded-full bg-slate-100 px-2 py-1 text-xs">{{ categoryName(product.category_id) }}</span></td>
                   <td class="px-3 py-2 font-semibold uppercase">{{ product.code }}</td>
                   <td class="px-3 py-2">{{ product.name }}</td>
                   <td class="px-3 py-2">{{ product.unit }}</td>
@@ -256,6 +311,7 @@
               </tbody>
             </table>
           </div>
+        </div>
         </div>
 
         <div class="panel space-y-4 border-2 border-slate-200">
@@ -437,6 +493,55 @@
       </section>
     </main>
 
+    <div v-if="showCatalogReviewModal" class="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/70 p-4 no-print">
+      <div class="w-full max-w-6xl rounded-2xl bg-white p-6 shadow-2xl space-y-4 max-h-[92vh] overflow-auto">
+        <div class="flex items-start justify-between gap-3">
+          <div>
+            <h3 class="text-lg font-bold text-emerald-700">Bảng Duyệt Danh Mục Mới &amp; Chuẩn Hóa Mã Hàng</h3>
+            <p class="text-sm text-slate-500">Nhóm được trích xuất theo ngữ cảnh dòng; mã số/trống phải đổi thành shortcut chữ trước khi lưu.</p>
+          </div>
+          <button @click="resetCatalogImport()" class="btn-secondary">Hủy</button>
+        </div>
+        <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
+          <div class="rounded-2xl bg-emerald-50 p-3"><div class="text-xs text-slate-500">Dòng đọc</div><strong>{{ catalogImportSummary?.totalRows || 0 }}</strong></div>
+          <div class="rounded-2xl bg-emerald-50 p-3"><div class="text-xs text-slate-500">Nhóm phát hiện</div><strong>{{ catalogImportSummary?.totalCategories || 0 }}</strong></div>
+          <div class="rounded-2xl bg-emerald-50 p-3"><div class="text-xs text-slate-500">Mặt hàng mới</div><strong>{{ catalogImportSummary?.newItems || 0 }}</strong></div>
+          <div class="rounded-2xl bg-emerald-50 p-3"><div class="text-xs text-slate-500">Theo thời giá</div><strong>{{ catalogImportSummary?.marketPriceItems || 0 }}</strong></div>
+        </div>
+        <div class="space-y-2">
+          <h4 class="font-bold">Nhóm hàng phát hiện</h4>
+          <div class="flex flex-wrap gap-2">
+            <span v-for="category in catalogReviewCategories" :key="category.name" class="rounded-full border px-3 py-1 text-sm" :class="category.isNew ? 'border-amber-300 bg-amber-50 text-amber-800' : 'border-slate-200 bg-slate-50'">{{ category.name }}</span>
+          </div>
+        </div>
+        <div class="overflow-x-auto rounded-2xl border border-slate-100">
+          <table class="min-w-full text-sm">
+            <thead class="thead"><tr><th class="th">Nhóm</th><th class="th">Mã gốc / shortcut</th><th class="th">Tên</th><th class="th">ĐVT</th><th class="th text-right">Giá</th><th class="th">Cờ</th></tr></thead>
+            <tbody class="divide-y divide-slate-100">
+              <tr v-for="item in catalogReviewItems" :key="item.id">
+                <td class="px-3 py-2">{{ item.categoryName }}</td>
+                <td class="px-3 py-2">
+                  <input v-model="item.code" class="input uppercase" :class="item.requiresShortcut && !/^[a-z][a-z0-9_-]*$/i.test(item.code) ? 'border-rose-400 bg-rose-50' : ''" placeholder="shortcut chữ">
+                  <div v-if="item.requiresShortcut" class="mt-1 text-xs text-rose-600">Mã số/trống: bắt buộc đổi thành mã chữ.</div>
+                </td>
+                <td class="px-3 py-2"><input v-model="item.name" class="input"></td>
+                <td class="px-3 py-2"><input v-model="item.unit" class="input"></td>
+                <td class="px-3 py-2"><input v-model.number="item.price" type="number" min="0" class="input text-right"></td>
+                <td class="px-3 py-2 whitespace-nowrap">
+                  <span v-if="item.isMarketPrice" class="rounded-full bg-amber-100 px-2 py-1 text-xs text-amber-800">Theo thời giá</span>
+                  <span v-if="item.existingProductId" class="rounded-full bg-slate-100 px-2 py-1 text-xs text-slate-600">Đã có</span>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="flex justify-end gap-2">
+          <button @click="resetCatalogImport()" class="btn-secondary">Hủy nhập</button>
+          <button @click="approveCatalogImport" class="btn-primary">Xác Nhận Thêm Toàn Bộ Danh Mục</button>
+        </div>
+      </div>
+    </div>
+
     <div v-if="showNewProductsModal" class="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/70 p-4 no-print">
       <div class="w-full max-w-5xl rounded-2xl bg-white p-6 shadow-2xl space-y-4 max-h-[90vh] overflow-auto">
         <div class="flex items-center justify-between gap-3">
@@ -525,6 +630,19 @@
         <div class="flex gap-2 justify-end">
           <button @click="closeSchoolDeleteModal" class="btn-secondary">Huỷ</button>
           <button @click="confirmDeleteSchool" class="btn-danger">Xác nhận xóa</button>
+        </div>
+      </div>
+    </div>
+
+    <div v-if="showCategoryDeleteModal" class="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/70 p-4 no-print">
+      <div class="w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl space-y-4">
+        <h3 class="text-lg font-bold text-rose-700">Xác nhận xóa nhóm hàng</h3>
+        <p class="text-sm text-slate-600">Sản phẩm thuộc nhóm <strong>{{ categoryToDelete?.name || '' }}</strong> sẽ được giữ lại và bỏ liên kết nhóm.</p>
+        <div class="rounded-lg bg-amber-50 border border-amber-200 px-3 py-2 text-sm font-mono text-amber-900 select-all">XAC NHAN XOA NHOM</div>
+        <input v-model="categoryDeleteConfirmText" class="input w-full" placeholder="Nhập XAC NHAN XOA NHOM">
+        <div class="flex gap-2 justify-end">
+          <button @click="closeCategoryDeleteModal" class="btn-secondary">Huỷ</button>
+          <button @click="confirmDeleteCategory" class="btn-danger">Xác nhận xóa</button>
         </div>
       </div>
     </div>
