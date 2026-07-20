@@ -83,7 +83,10 @@
             </button>
             <button @click="openUserCPModal" class="btn-ghost flex items-center gap-2">
               <i class="fas fa-user-circle text-emerald-200 text-lg"></i>
-              <span>{{ currentUser?.nickname || currentUser?.username || '' }}</span>
+              <span class="flex flex-col items-start leading-tight">
+                <span>{{ currentUser?.nickname || currentUser?.username || '' }}</span>
+                <span v-if="currentUser?.vendor_name" class="text-[10px] font-medium text-emerald-100">{{ currentUser.vendor_name }}</span>
+              </span>
             </button>
             <button @click="logout" class="btn-ghost">
               <i class="fa-solid fa-right-from-bracket"></i>
@@ -136,6 +139,7 @@
           <div>
             <h2 class="text-xl font-bold text-slate-900">Trung Tâm Tài Khoản</h2>
             <p class="text-sm text-slate-500">{{ currentUser?.username || '' }}</p>
+            <p v-if="currentUser?.vendor_name" class="text-xs font-semibold text-emerald-700">{{ currentUser.vendor_name }}</p>
           </div>
           <button @click="closeUserCPModal" class="text-slate-400 hover:text-slate-700" aria-label="Đóng">
             <i class="fa-solid fa-xmark text-xl"></i>
