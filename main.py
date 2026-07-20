@@ -169,6 +169,23 @@ class CreateVendorUserSchema(BaseModel):
     vendor_id: Optional[UUID] = None
 
 
+class VendorSchema(BaseModel):
+    code: str = Field(..., min_length=2, max_length=50)
+    name: str = Field(..., min_length=2, max_length=150)
+    status: str = Field(default="active")
+
+
+class VendorRecord(VendorSchema):
+    id: UUID
+    created_at: datetime
+
+
+class AssignVendorUserSchema(BaseModel):
+    vendor_id: UUID
+    role: str
+    status: str = "active"
+
+
 class AuthUser(BaseModel):
     id: UUID
     username: str
@@ -654,15 +671,85 @@ async def current_user(user: Dict[str, Any] = Depends(require_bearer_user)):
 
 
 @app.get("/api/auth/users", response_model=List[AuthUser])
-async def list_users(user: Dict[str, Any] = Depends(require_management_user)):
+async def list_users(
+    vendor_id: Optional[UUID] = Query(default=None),
+    user: Dict[str, Any] = Depends(require_management_user),
+):
     try:
         query = require_read_client().table("users").select(
             "id,username,nickname,email,provider,role,status,vendor_id"
         )
-        response = _scope_query(query, user).order("created_at").execute()
+        if _is_system_admin(user):
+            if vendor_id:
+                query = query.eq("vendor_id", str(vendor_id))
+        else:
+            query = _scope_query(query, user)
+        response = query.order("created_at").execute()
         return [_auth_user_from_row(row) for row in response.data or []]
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Không thể tải danh sách tài khoản: {exc}") from exc
+
+
+@app.get("/api/vendors", response_model=List[VendorRecord])
+async def list_vendors(_: Dict[str, Any] = Depends(require_admin_user)):
+    try:
+        response = (
+            require_read_client()
+            .table("vendors")
+            .select("id,code,name,status,created_at")
+            .order("name")
+            .execute()
+        )
+        return response.data or []
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Không thể tải danh sách vendor: {exc}") from exc
+
+
+@app.post("/api/vendors", response_model=VendorRecord, status_code=status.HTTP_201_CREATED)
+async def create_vendor(
+    vendor: VendorSchema,
+    _: Dict[str, Any] = Depends(require_admin_user),
+):
+    if vendor.status not in {"active", "locked"}:
+        raise HTTPException(status_code=422, detail="Trạng thái vendor không hợp lệ.")
+    payload = vendor.model_dump()
+    payload["code"] = _code(payload["code"])
+    try:
+        response = require_write_client().table("vendors").insert(payload).execute()
+        if not response.data:
+            raise HTTPException(status_code=400, detail="Không thể tạo vendor.")
+        return response.data[0]
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Không thể tạo vendor: {exc}") from exc
+
+
+@app.put("/api/vendors/{vendor_id}", response_model=VendorRecord)
+async def update_vendor(
+    vendor_id: UUID,
+    vendor: VendorSchema,
+    _: Dict[str, Any] = Depends(require_admin_user),
+):
+    if vendor.status not in {"active", "locked"}:
+        raise HTTPException(status_code=422, detail="Trạng thái vendor không hợp lệ.")
+    payload = vendor.model_dump()
+    payload["code"] = _code(payload["code"])
+    try:
+        response = (
+            require_write_client()
+            .table("vendors")
+            .update(payload)
+            .eq("id", str(vendor_id))
+            .execute()
+        )
+        if not response.data:
+            raise HTTPException(status_code=404, detail="Không tìm thấy vendor.")
+        return response.data[0]
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Không thể cập nhật vendor: {exc}") from exc
 
 
 @app.post("/api/auth/users", response_model=Dict[str, Any])
@@ -670,11 +757,33 @@ async def create_vendor_user(
     payload: CreateVendorUserSchema,
     user: Dict[str, Any] = Depends(require_management_user),
 ):
-    if payload.role not in {"report-viewer", "staff", "manager"}:
+    caller_role = user.get("role", "")
+    allowed_roles = {
+        "admin": {"owner", "manager", "staff", "report-viewer"},
+        "owner": {"manager", "staff", "report-viewer"},
+        "manager": {"staff", "report-viewer"},
+    }.get(caller_role, set())
+    if payload.role not in allowed_roles:
         raise HTTPException(status_code=422, detail="Vai trò onboarding không hợp lệ.")
+    if payload.vendor_id and not _is_system_admin(user):
+        if str(payload.vendor_id) != _vendor_id(user):
+            raise HTTPException(status_code=403, detail="Không được gán tài khoản sang vendor khác.")
     vendor_id = str(payload.vendor_id) if payload.vendor_id and _is_system_admin(user) else _vendor_id(user)
     if not vendor_id:
         raise HTTPException(status_code=422, detail="Phải chỉ định vendor cho tài khoản mới.")
+    vendor_response = (
+        require_read_client()
+        .table("vendors")
+        .select("id,status")
+        .eq("id", vendor_id)
+        .limit(1)
+        .execute()
+    )
+    vendor_record = vendor_response.data[0] if vendor_response.data else None
+    if not vendor_record:
+        raise HTTPException(status_code=404, detail="Vendor không tồn tại.")
+    if vendor_record.get("status") != "active":
+        raise HTTPException(status_code=409, detail="Vendor đang bị khóa.")
     temp_pin = "".join(secrets.choice("0123456789") for _ in range(4))
     record = {
         "username": payload.username.strip(),
@@ -723,6 +832,47 @@ async def update_profile(
         raise
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Không thể cập nhật thông tin cá nhân: {exc}") from exc
+
+
+@app.put("/api/auth/users/{user_id}", response_model=AuthUser)
+async def assign_vendor_user(
+    user_id: UUID,
+    assignment: AssignVendorUserSchema,
+    _: Dict[str, Any] = Depends(require_admin_user),
+):
+    if assignment.role not in {"owner", "manager", "staff", "report-viewer"}:
+        raise HTTPException(status_code=422, detail="Vai trò vendor không hợp lệ.")
+    if assignment.status not in {"active", "locked"}:
+        raise HTTPException(status_code=422, detail="Trạng thái tài khoản không hợp lệ.")
+    vendor = (
+        require_read_client()
+        .table("vendors")
+        .select("id,status")
+        .eq("id", str(assignment.vendor_id))
+        .limit(1)
+        .execute()
+    )
+    if not vendor.data:
+        raise HTTPException(status_code=404, detail="Vendor không tồn tại.")
+    try:
+        response = (
+            require_write_client()
+            .table("users")
+            .update({
+                "vendor_id": str(assignment.vendor_id),
+                "role": assignment.role,
+                "status": assignment.status,
+            })
+            .eq("id", str(user_id))
+            .execute()
+        )
+        if not response.data:
+            raise HTTPException(status_code=404, detail="Không tìm thấy tài khoản.")
+        return _auth_user_from_row(response.data[0])
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Không thể gán tài khoản cho vendor: {exc}") from exc
 
 
 @app.post("/api/auth/change-password")
