@@ -392,6 +392,34 @@ async def create_product(product: ProductSchema):
         )
 
 
+@app.post("/api/products/bulk")
+async def create_products_bulk(products_list: List[ProductSchema]):
+    if not products_list:
+        return {"status": "success", "inserted_count": 0, "data": []}
+    try:
+        payload = jsonable_encoder(products_list)
+        for item in payload:
+            item["code"] = _code(item["code"])
+        response = (
+            require_write_client()
+            .table("products")
+            .upsert(payload, on_conflict="code")
+            .execute()
+        )
+        return {
+            "status": "success",
+            "inserted_count": len(response.data or []),
+            "data": response.data or [],
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Nhập hàng loạt thực phẩm thất bại: {exc}",
+        )
+
+
 @app.delete("/api/products/{code}")
 async def delete_product(code: str):
     try:

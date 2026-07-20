@@ -104,8 +104,8 @@
                 </tr>
               </thead>
               <tbody class="divide-y divide-slate-100">
-                <tr v-for="(row, index) in rows" :key="row.id" class="align-top hover:bg-slate-50">
-                  <td class="px-3 py-3 text-center text-slate-400">{{ index + 1 }}</td>
+                <tr v-for="(row, index) in paginatedRows" :key="row.id" class="align-top hover:bg-slate-50">
+                  <td class="px-3 py-3 text-center text-slate-400">{{ (matrixPage - 1) * pageSize + index + 1 }}</td>
                   <td class="px-3 py-3 relative">
                     <input v-model="row.shortcut" @input="onShortcutInput(row)" @focus="lockCell(row, 'shortcut'); openSuggestions(row)" @keydown="onShortcutKeydown($event, row)" @blur="unlockCell(row, 'shortcut'); closeSuggestions(row)" placeholder="tv, cl..." class="input uppercase font-semibold tracking-wide">
                     <div v-if="row.showSuggestions && row.suggestions.length" class="suggestions">
@@ -135,6 +135,13 @@
                 </tr>
               </tbody>
             </table>
+          </div>
+          <div class="flex flex-wrap items-center justify-between gap-2 border-t border-slate-100 px-4 py-3 text-sm">
+            <span class="text-slate-500">{{ paginationLabel(rows, matrixPage) }}</span>
+            <div class="flex gap-2">
+              <button @click="previousPage('matrix')" :disabled="matrixPage <= 1" class="btn-secondary disabled:opacity-50">Trước</button>
+              <button @click="nextPage('matrix', rows)" :disabled="matrixPage >= matrixPageCount" class="btn-secondary disabled:opacity-50">Sau</button>
+            </div>
           </div>
         </div>
 
@@ -230,7 +237,10 @@
           </div>
           <div class="flex gap-2">
             <input v-model="categoryForm.name" class="input" placeholder="Tên nhóm hàng">
-            <button @click="saveCategory" class="btn-primary whitespace-nowrap">Thêm nhóm</button>
+            <button @click="saveCategory" :disabled="isSubmittingCategory" class="btn-primary whitespace-nowrap disabled:opacity-60">
+              <i :class="isSubmittingCategory ? 'fa-solid fa-spinner fa-spin' : 'fa-solid fa-plus'"></i>
+              {{ isSubmittingCategory ? 'Đang lưu...' : 'Thêm nhóm' }}
+            </button>
           </div>
           <div class="overflow-x-auto">
             <table class="min-w-full text-sm">
@@ -239,7 +249,7 @@
                 <tr v-for="category in filteredCategories" :key="category.id">
                   <td class="px-3 py-2">
                     <input v-if="editingCategoryId === category.id" v-model="categoryDraftName" class="input">
-                    <span v-else class="font-semibold">{{ category.name }}</span>
+                    <span v-else class="font-semibold">{{ category.name }} <span class="text-xs text-slate-400">({{ categoryProductCount(category.id) }} mặt hàng)</span></span>
                   </td>
                   <td class="px-3 py-2 text-right whitespace-nowrap">
                     <template v-if="editingCategoryId === category.id">
@@ -275,7 +285,13 @@
               <h2 class="section-title">Danh mục sản phẩm</h2>
               <p class="section-subtitle">Sắp xếp theo nhóm hàng, mã tắt và giá hiện hành.</p>
             </div>
-            <input v-model="productFilter" class="input w-56" placeholder="Tìm mã/tên">
+            <div class="flex flex-wrap gap-2">
+              <input v-model="productFilter" class="input w-56" placeholder="Tìm mã/tên">
+              <select v-model="productCategoryFilter" class="input w-48">
+                <option value="">Tất cả nhóm</option>
+                <option v-for="category in categories" :key="category.id" :value="category.id">{{ category.name }}</option>
+              </select>
+            </div>
           </div>
           <div class="grid sm:grid-cols-5 gap-2">
             <input v-model="productForm.code" :disabled="editingProduct" class="input uppercase" placeholder="code">
@@ -297,7 +313,7 @@
                 <tr><th class="th">Nhóm</th><th class="th">Code</th><th class="th">Tên</th><th class="th">ĐVT</th><th class="th text-right">Giá</th><th class="th"></th></tr>
               </thead>
               <tbody class="divide-y divide-slate-100">
-                <tr v-for="product in filteredProducts" :key="product.code">
+                <tr v-for="(product, index) in paginatedProducts" :key="product.code">
                   <td class="px-3 py-2"><span class="rounded-full bg-slate-100 px-2 py-1 text-xs">{{ categoryName(product.category_id) }}</span></td>
                   <td class="px-3 py-2 font-semibold uppercase">{{ product.code }}</td>
                   <td class="px-3 py-2">{{ product.name }}</td>
@@ -310,6 +326,13 @@
                 </tr>
               </tbody>
             </table>
+          </div>
+          <div class="flex flex-wrap items-center justify-between gap-2 border-t border-slate-100 px-4 py-3 text-sm">
+            <span class="text-slate-500">{{ paginationLabel(filteredProducts, catalogPage) }}</span>
+            <div class="flex gap-2">
+              <button @click="previousPage('catalog')" :disabled="catalogPage <= 1" class="btn-secondary disabled:opacity-50">Trước</button>
+              <button @click="nextPage('catalog', filteredProducts)" :disabled="catalogPage >= catalogPageCount" class="btn-secondary disabled:opacity-50">Sau</button>
+            </div>
           </div>
         </div>
         </div>
@@ -390,8 +413,8 @@
               </tr>
             </thead>
             <tbody class="divide-y divide-slate-100">
-              <tr v-for="(product, index) in filteredStockProducts" :key="product.id" class="hover:bg-slate-50">
-                <td class="px-3 py-3 text-center text-slate-400">{{ index + 1 }}</td>
+              <tr v-for="(product, index) in paginatedStockProducts" :key="product.id" class="hover:bg-slate-50">
+                <td class="px-3 py-3 text-center text-slate-400">{{ (stockPage - 1) * pageSize + index + 1 }}</td>
                 <td class="px-3 py-3 font-bold uppercase">{{ product.code }}</td>
                 <td class="px-3 py-3">{{ product.name }}</td>
                 <td class="px-3 py-3 text-center text-slate-500">{{ product.unit }}</td>
@@ -411,6 +434,13 @@
               </tr>
             </tbody>
           </table>
+        </div>
+        <div class="flex flex-wrap items-center justify-between gap-2 border-t border-slate-100 px-4 py-3 text-sm">
+          <span class="text-slate-500">{{ paginationLabel(filteredStockProducts, stockPage) }}</span>
+          <div class="flex gap-2">
+            <button @click="previousPage('stock')" :disabled="stockPage <= 1" class="btn-secondary disabled:opacity-50">Trước</button>
+            <button @click="nextPage('stock', filteredStockProducts)" :disabled="stockPage >= stockPageCount" class="btn-secondary disabled:opacity-50">Sau</button>
+          </div>
         </div>
       </section>
 
