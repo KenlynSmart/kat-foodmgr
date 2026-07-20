@@ -218,6 +218,12 @@ class StockSchema(BaseModel):
     qty: float = Field(..., description="Số lượng tồn kho khả dụng hiện tại")
 
 
+class OrderBatchSchema(BaseModel):
+    id: Optional[UUID] = None
+    qty_change: float
+    note: str = ""
+
+
 class OrderUpsertSchema(BaseModel):
     delivery_date: date = Field(..., description="Ngày giao nhận hàng (YYYY-MM-DD)")
     product_id: Optional[UUID] = Field(None, description="UUID mặt hàng phân bổ")
@@ -229,6 +235,7 @@ class OrderUpsertSchema(BaseModel):
         default=None, description="Mã trường để tương thích ngược"
     )
     qty: float = Field(..., description="Số lượng thực tế phân phối")
+    batches: List[OrderBatchSchema] = Field(default_factory=list)
 
 
 class SchoolRecord(SchoolSchema):
@@ -260,6 +267,7 @@ class DailyOrderRecord(BaseModel):
     school_id: UUID
     qty: float
     created_at: datetime
+    batches: List[OrderBatchSchema] = Field(default_factory=list)
 
 
 def _code(value: str) -> str:
@@ -280,6 +288,34 @@ def _stock_select() -> str:
 
 def _order_select() -> str:
     return "id,delivery_date,product_id,school_id,qty,created_at"
+
+
+def _order_batch_select() -> str:
+    return "id,daily_order_id,qty_change,note,created_at"
+
+
+def _attach_order_batches(orders: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    if not orders:
+        return orders
+    order_ids = [str(order["id"]) for order in orders]
+    response = (
+        require_read_client()
+        .table("daily_order_batches")
+        .select(_order_batch_select())
+        .in_("daily_order_id", order_ids)
+        .order("created_at")
+        .execute()
+    )
+    batches_by_order: Dict[str, List[Dict[str, Any]]] = {}
+    for batch in response.data or []:
+        batches_by_order.setdefault(str(batch["daily_order_id"]), []).append({
+            "id": batch["id"],
+            "qty_change": batch["qty_change"],
+            "note": batch.get("note") or "",
+        })
+    for order in orders:
+        order["batches"] = batches_by_order.get(str(order["id"]), [])
+    return orders
 
 
 def _school_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -309,6 +345,39 @@ def _lookup_id_by_code(table: str, code_field: str, code: str) -> Optional[str]:
     if response.data:
         return str(response.data[0]["id"])
     return None
+
+
+def _normalise_order_payload(item: Dict[str, Any]) -> Dict[str, Any]:
+    data = dict(item)
+    batches = data.pop("batches", []) or []
+    if not data.get("product_id") and data.get("product_code"):
+        data["product_id"] = _lookup_id_by_code("products", "code", data["product_code"])
+    if not data.get("school_id") and data.get("school_code"):
+        data["school_id"] = _lookup_id_by_code("schools", "code", data["school_code"])
+    data.pop("product_code", None)
+    data.pop("school_code", None)
+    if not data.get("product_id") or not data.get("school_id"):
+        raise HTTPException(status_code=400, detail="Thiếu product_id hoặc school_id cho daily_orders.")
+    if not batches and data["qty"] > 0:
+        batches = [{"qty_change": data["qty"], "note": "Đợt sáng mặc định"}]
+    data["batches"] = batches
+    return data
+
+
+def _sync_order_batches(client: Client, daily_order_id: str, batches: List[Dict[str, Any]]) -> None:
+    client.table("daily_order_batches").delete().eq("daily_order_id", daily_order_id).execute()
+    payload = [
+        {
+            **({"id": batch["id"]} if batch.get("id") else {}),
+            "daily_order_id": daily_order_id,
+            "qty_change": batch["qty_change"],
+            "note": str(batch.get("note") or "").strip(),
+        }
+        for batch in batches
+        if batch["qty_change"] != 0
+    ]
+    if payload:
+        client.table("daily_order_batches").insert(payload).execute()
 
 
 @app.post("/api/auth/login", response_model=AuthResponse)
@@ -867,7 +936,7 @@ async def get_daily_orders(date: date):
             .eq("delivery_date", date)
             .execute()
         )
-        return response.data
+        return _attach_order_batches(response.data or [])
     except Exception as exc:
         raise HTTPException(
             status_code=500,
@@ -878,21 +947,11 @@ async def get_daily_orders(date: date):
 @app.post("/api/orders/upsert")
 async def upsert_daily_order(order_item: OrderUpsertSchema):
     try:
-        data = order_item.model_dump(mode="json")
-        if not data.get("product_id") and data.get("product_code"):
-            resolved = _lookup_id_by_code("products", "code", data["product_code"])
-            data["product_id"] = resolved or data.pop("product_code")
-        if not data.get("school_id") and data.get("school_code"):
-            resolved = _lookup_id_by_code("schools", "code", data["school_code"])
-            data["school_id"] = resolved or data.pop("school_code")
-        data.pop("product_code", None)
-        data.pop("school_code", None)
-        if not data.get("product_id") or not data.get("school_id"):
-            raise HTTPException(status_code=400, detail="Thiếu product_id hoặc school_id cho daily_orders.")
-
-        if data["qty"] <= 0:
+        data = _normalise_order_payload(jsonable_encoder(order_item))
+        client = require_write_client()
+        if data["qty"] <= 0 and not data["batches"]:
             (
-                require_write_client().table("daily_orders")
+                client.table("daily_orders")
                 .delete()
                 .eq("delivery_date", data["delivery_date"])
                 .eq("product_id", str(data["product_id"]))
@@ -902,14 +961,19 @@ async def upsert_daily_order(order_item: OrderUpsertSchema):
             return {"status": "deleted", "message": "Đã xóa phân bổ do SL bằng 0."}
 
         response = (
-            require_write_client().table("daily_orders")
+            client.table("daily_orders")
             .upsert(
-                data,
+                {key: value for key, value in data.items() if key != "batches"},
                 on_conflict="delivery_date,product_id,school_id",
             )
             .execute()
         )
-        return {"status": "success", "data": response.data[0]}
+        parent = response.data[0]
+        _sync_order_batches(client, str(parent["id"]), data["batches"])
+        parent["batches"] = data["batches"]
+        return {"status": "success", "data": parent}
+    except HTTPException:
+        raise
     except Exception as exc:
         raise HTTPException(
             status_code=500,
@@ -931,24 +995,29 @@ async def bulk_upsert_daily_orders(orders_list: List[OrderUpsertSchema]):
         upsert_payload = []
         delete_payload = []
         for item in payload:
-            if not item.get("product_id") and item.get("product_code"):
-                item["product_id"] = _lookup_id_by_code("products", "code", item["product_code"])
-            if not item.get("school_id") and item.get("school_code"):
-                item["school_id"] = _lookup_id_by_code("schools", "code", item["school_code"])
-            item.pop("product_code", None)
-            item.pop("school_code", None)
-            if not item.get("product_id") or not item.get("school_id"):
-                raise HTTPException(status_code=400, detail="Thiếu product_id hoặc school_id cho daily_orders.")
-            (delete_payload if item["qty"] <= 0 else upsert_payload).append(item)
+            normalised = _normalise_order_payload(item)
+            (delete_payload if normalised["qty"] <= 0 and not normalised["batches"] else upsert_payload).append(normalised)
 
         client = require_write_client()
         upserted_count = 0
         if upsert_payload:
             response = client.table("daily_orders").upsert(
-                upsert_payload,
+                [{key: value for key, value in item.items() if key != "batches"} for item in upsert_payload],
                 on_conflict="delivery_date,product_id,school_id",
             ).execute()
             upserted_count = len(response.data or [])
+            parents_by_key = {
+                (
+                    str(parent["delivery_date"]),
+                    str(parent["product_id"]),
+                    str(parent["school_id"]),
+                ): parent
+                for parent in response.data or []
+            }
+            for item in upsert_payload:
+                key = (item["delivery_date"], str(item["product_id"]), str(item["school_id"]))
+                parent = parents_by_key[key]
+                _sync_order_batches(client, str(parent["id"]), item["batches"])
 
         deleted_count = 0
         for item in delete_payload:
