@@ -1030,12 +1030,21 @@ createApp({
       return data;
     }
 
+    function requestWithTimeout(path, options = {}, timeoutMs = 15000) {
+      return Promise.race([
+        apiJson(path, options),
+        new Promise((_, reject) => {
+          window.setTimeout(() => reject(new Error(`Request timeout: ${path}`)), timeoutMs);
+        })
+      ]);
+    }
+
     async function loginWithCredentials() {
       if (isLoggingIn.value) return;
       authError.value = '';
       isLoggingIn.value = true;
       try {
-        const response = await apiJson('/api/auth/login', {
+        const response = await requestWithTimeout('/api/auth/login', {
           method: 'POST',
           body: JSON.stringify(loginForm.value)
         });
@@ -1077,21 +1086,36 @@ createApp({
     async function loadAuthUser() {
       if (!authToken.value) return;
       try {
-        currentUser.value = await apiJson('/api/auth/me');
+        currentUser.value = await requestWithTimeout('/api/auth/me');
         setActiveVendor(currentUser.value);
         mustChangePassword.value = Boolean(currentUser.value?.must_change_password);
         showPasswordOnboarding.value = mustChangePassword.value;
         if (['admin', 'owner', 'manager'].includes(currentUser.value.role)) {
           if (currentUser.value.role === 'admin') {
             currentTab.value = 'admin-vendors';
-            vendors.value = await apiJson('/api/vendors');
-            selectedVendorId.value = vendors.value[0]?.id || '';
+            const [vendorResult, userResult] = await Promise.allSettled([
+              requestWithTimeout('/api/vendors'),
+              requestWithTimeout('/api/auth/users')
+            ]);
+            if (vendorResult.status === 'fulfilled') {
+              vendors.value = Array.isArray(vendorResult.value) ? vendorResult.value : [];
+              selectedVendorId.value = vendors.value[0]?.id || '';
+            } else {
+              logError('loadAdminVendors', vendorResult.reason);
+            }
+            if (userResult.status === 'fulfilled') {
+              users.value = Array.isArray(userResult.value) ? userResult.value : [];
+            } else {
+              logError('loadAdminUsers', userResult.reason);
+            }
           } else {
             selectedVendorId.value = currentUser.value.vendor_id || '';
+            userListLoading.value = true;
+            users.value = await apiJson('/api/auth/users');
           }
-          userListLoading.value = true;
-          users.value = await apiJson('/api/auth/users');
-          if (currentUser.value.role === 'admin') await loadAdminSubscriptionData();
+          if (currentUser.value.role === 'admin') {
+            void loadAdminSubscriptionData();
+          }
         }
         return true;
       } catch (error) {
