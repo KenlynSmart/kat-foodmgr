@@ -177,13 +177,20 @@
                     {{ (matrixPage - 1) * pageSize + index + 1 }}
                   </td>
                   <td class="px-3 py-3 relative">
-                    <input v-model="row.shortcut" @input="onShortcutInput(row)" @focus="lockCell(row, 'shortcut'); openSuggestions(row)" @keydown="onShortcutKeydown($event, row)" @blur="unlockCell(row, 'shortcut'); closeSuggestions(row)" placeholder="tv, cl..." class="input uppercase font-semibold tracking-wide">
-                    <div v-if="row.showSuggestions && row.suggestions.length" class="suggestions">
-                      <button v-for="(product, idx) in row.suggestions" :key="product.code" @mousedown.prevent="pickProduct(row, product)" class="suggestion-item" :class="idx === row.suggestIndex ? 'bg-emerald-50' : ''">
-                        <span><span class="font-bold text-emerald-700">{{ product.code }}</span> · {{ product.name }}</span>
-                        <span class="text-slate-400">{{ product.unit }}</span>
-                      </button>
-                    </div>
+                    <input v-model="row.shortcut" @input="onShortcutInput(row)" @focus="lockCell(row, 'shortcut'); openSuggestions(row, $event)" @keydown="onShortcutKeydown($event, row)" @blur="unlockCell(row, 'shortcut'); closeSuggestions(row)" placeholder="tv, cl..." class="input uppercase font-semibold tracking-wide">
+                    <teleport to="body">
+                      <div v-if="row.showSuggestions && row.suggestions.length" :style="suggestionStyle(row)" class="suggestions absolute z-50 left-0 mt-1 bg-white shadow-2xl border border-slate-200 rounded-xl overflow-y-auto max-h-60 w-[300px] xs:w-[380px] sm:w-[520px] md:w-[650px]">
+                        <button v-for="(product, idx) in row.suggestions" :key="product.code" @mousedown.prevent="pickProduct(row, product)" class="suggestion-item grid grid-cols-12 gap-2 items-center px-4 py-2.5 cursor-pointer border-b border-slate-100 hover:bg-emerald-50 transition-colors duration-150 last:border-0" :class="idx === row.suggestIndex ? 'bg-emerald-50' : ''">
+                          <span class="col-span-2 text-center font-bold tracking-wide text-xs bg-emerald-100 text-emerald-800 rounded-md px-1.5 py-0.5 uppercase truncate">{{ product.code }}</span>
+                          <span class="col-span-5 text-slate-700 font-medium truncate text-left">{{ product.name }}</span>
+                          <span class="col-span-2 text-slate-400 text-center text-xs truncate">{{ product.unit || '—' }}</span>
+                          <span class="col-span-3 text-right text-xs font-semibold text-slate-600 font-mono">
+                            <span v-if="product.is_market_price || product.isMarketPrice" class="inline-flex rounded-md bg-slate-100 px-1.5 py-0.5 text-slate-500">Thời giá</span>
+                            <template v-else>{{ product.price ? money(product.price) : '—' }}</template>
+                          </span>
+                        </button>
+                      </div>
+                    </teleport>
                   </td>
                   <td class="px-3 py-3">
                     <div class="font-semibold text-slate-900">{{ row.productName || 'Chưa khớp mã' }}</div>

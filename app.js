@@ -64,7 +64,8 @@ createApp({
       subTotal: 0,
       suggestions: [],
       suggestIndex: 0,
-      showSuggestions: false
+      showSuggestions: false,
+      suggestionPosition: {}
     });
 
     const state = {
@@ -327,10 +328,22 @@ createApp({
         .slice(0, 5);
     }
 
-    function openSuggestions(row) {
+    function openSuggestions(row, event) {
+      const target = event?.currentTarget;
+      if (target) {
+        const rect = target.getBoundingClientRect();
+        row.suggestionPosition = {
+          top: `${rect.bottom + window.scrollY}px`,
+          left: `${rect.left + window.scrollX}px`
+        };
+      }
       row.suggestions = findSuggestions(row.shortcut);
       row.suggestIndex = 0;
       row.showSuggestions = true;
+    }
+
+    function suggestionStyle(row) {
+      return row.suggestionPosition || {};
     }
 
     function closeSuggestions(row) {
@@ -2137,6 +2150,7 @@ createApp({
       onShortcutInput,
       onShortcutKeydown,
       openSuggestions,
+      suggestionStyle,
       closeSuggestions,
       pickProduct,
       recalcRow,
