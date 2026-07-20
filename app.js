@@ -228,7 +228,8 @@ createApp({
       { id: 'admin-vendors', label: 'Quản lý Vendor', icon: 'fa-solid fa-building-shield' },
       { id: 'admin-members', label: 'Quản lý Thành viên', icon: 'fa-solid fa-users-gear' },
       { id: 'admin-subscriptions', label: 'Quản lý Gói Dịch Vụ', icon: 'fa-solid fa-key' },
-      { id: 'admin-revenue', label: 'Doanh Thu Nền Tảng', icon: 'fa-solid fa-chart-line' }
+      { id: 'admin-revenue', label: 'Doanh Thu Nền Tảng', icon: 'fa-solid fa-chart-line' },
+      { id: 'debug', label: 'Debug', icon: 'fa-solid fa-terminal' }
     ];
 
     const analyticsRange = ref('day');
