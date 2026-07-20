@@ -35,12 +35,6 @@ createApp({
     const iconOptions = ['fa-school', 'fa-seedling', 'fa-apple-whole', 'fa-mug-hot', 'fa-bowl-rice', 'fa-basket-shopping'];
     const themeMap = Object.fromEntries(themes.map((theme) => [theme.bg_color, theme]));
 
-    const defaultSchools = [
-      { id: uid(), code: 'tanAn', name: 'Trường mầm non Tân An', bg_color: 'bg-sky-50', text_color: 'text-sky-800', border_color: 'border-sky-200', icon: 'fa-school', created_at: today },
-      { id: uid(), code: 'mitSuBa', name: 'Trường mầm non Mitsuba', bg_color: 'bg-emerald-50', text_color: 'text-emerald-800', border_color: 'border-emerald-200', icon: 'fa-seedling', created_at: today },
-      { id: uid(), code: 'lcTre', name: 'Trường mầm non Lộc Trẻ', bg_color: 'bg-amber-50', text_color: 'text-amber-800', border_color: 'border-amber-200', icon: 'fa-bowl-rice', created_at: today },
-      { id: uid(), code: 'sunKid', name: 'Trường mầm non Sun Kid', bg_color: 'bg-violet-50', text_color: 'text-violet-800', border_color: 'border-violet-200', icon: 'fa-apple-whole', created_at: today }
-    ];
     const emptyRow = () => ({
       id: uid(),
       isDirty: false,
@@ -63,7 +57,7 @@ createApp({
 
     const state = {
       rows: [emptyRow()],
-      schools: clone(defaultSchools),
+      schools: [],
       categories: [],
       stockMap: {},
       deliveryDate: today
@@ -108,6 +102,7 @@ createApp({
     const activeVendorId = ref(localStorage.getItem(ACTIVE_VENDOR_STORAGE_KEY) || '');
     const isAuthenticated = computed(() => Boolean(authToken.value));
     const currentUser = ref(null);
+    const currentVendorName = computed(() => currentUser.value?.vendor_name || 'Hệ thống Quản trị');
     const users = ref([]);
     const vendors = ref([]);
     const selectedVendorId = ref('');
@@ -317,6 +312,14 @@ createApp({
     }
 
     const triggerNotification = addToast;
+
+    function dismissStatusBanner() {
+      statusBanner.value = '';
+    }
+
+    function dismissNotification(notificationId) {
+      notifications.value = notifications.value.filter((notification) => notification.id !== notificationId);
+    }
 
     function handleAuthCallback() {
       const tokenParam = new URLSearchParams(window.location.search).get('auth_token');
@@ -884,7 +887,7 @@ createApp({
 
     function resetInMemoryDatabase() {
       rows.value = [emptyRow()];
-      schools.value = clone(defaultSchools);
+      schools.value = [];
       products.value = [];
       categories.value = [];
       stockMap.value = {};
@@ -924,7 +927,7 @@ createApp({
         const raw = localStorage.getItem(STORAGE_KEY);
         if (!raw) {
           rows.value = [emptyRow()];
-          schools.value = clone(defaultSchools);
+          schools.value = [];
           products.value = [];
           stockMap.value = {};
           rows.value.forEach((row) => {
@@ -937,7 +940,7 @@ createApp({
           return;
         }
         const parsed = JSON.parse(raw);
-        if (Array.isArray(parsed.schools) && parsed.schools.length) schools.value = parsed.schools;
+        if (Array.isArray(parsed.schools)) schools.value = parsed.schools;
         if (Array.isArray(parsed.products)) products.value = parsed.products;
         if (Array.isArray(parsed.categories)) categories.value = parsed.categories;
         if (parsed.stockMap && typeof parsed.stockMap === 'object') stockMap.value = normalizeStockMap(parsed.stockMap);
@@ -1378,7 +1381,10 @@ createApp({
 
         skipNextSync = true;
         applyingRemote = true;
-        if (Array.isArray(schoolRows) && schoolRows.length) {
+        if (Array.isArray(schoolRows)) {
+          if (!schoolRows.length) {
+            schools.value = [];
+          } else {
           const byId = new Map(schoolRows.map((school) => {
             const next = {
               ...school,
@@ -1401,6 +1407,7 @@ createApp({
           });
           byId.forEach((school) => nextSchools.push(school));
           schools.value = nextSchools;
+          }
         }
         if (Array.isArray(productRows)) {
           if (!productRows.length) {
@@ -2459,7 +2466,7 @@ createApp({
           totalRevenue: Math.round(importedRows.reduce((sum, item) => sum + Object.values(item.allocations).reduce((subtotal, value) => subtotal + num(value), 0) * num(item.price), 0))
         };
         const [schoolRows, productRows] = await Promise.all([fetchSchools(), fetchProducts()]);
-        if (Array.isArray(schoolRows) && schoolRows.length) schools.value = schoolRows.map((school) => ({ ...school, code: school.code || school.id }));
+        if (Array.isArray(schoolRows)) schools.value = schoolRows.map((school) => ({ ...school, code: school.code || school.id }));
         if (Array.isArray(productRows)) products.value = productRows.map((product) => ({ ...product, code: product.code || product.shortcut || '' }));
         clearExcelStaging(true);
         closeSingleSchoolImportModal();
@@ -2671,6 +2678,7 @@ createApp({
       notifications,
       toasts,
       triggerNotification,
+      dismissNotification,
       productFilter,
       productCategoryFilter,
       schoolFilter,
@@ -2694,6 +2702,7 @@ createApp({
       pendingMutationCount,
       isAuthenticated,
       currentUser,
+      currentVendorName,
       users,
       vendors,
       selectedVendorId,
@@ -2736,6 +2745,7 @@ createApp({
       loginWithGoogle,
       logout,
       statusBanner,
+      dismissStatusBanner,
       debugLogs,
       printSchoolId,
       productForm,
