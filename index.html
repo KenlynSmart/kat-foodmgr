@@ -105,7 +105,10 @@
               </thead>
               <tbody class="divide-y divide-slate-100">
                 <tr v-for="(row, index) in paginatedRows" :key="row.id" class="align-top hover:bg-slate-50">
-                  <td class="px-3 py-3 text-center text-slate-400">{{ (matrixPage - 1) * pageSize + index + 1 }}</td>
+                  <td class="px-3 py-3 text-center text-slate-400">
+                    <span v-if="row.isDirty" class="w-1.5 h-1.5 rounded-full bg-amber-500 inline-block animate-pulse mr-1"></span>
+                    {{ (matrixPage - 1) * pageSize + index + 1 }}
+                  </td>
                   <td class="px-3 py-3 relative">
                     <input v-model="row.shortcut" @input="onShortcutInput(row)" @focus="lockCell(row, 'shortcut'); openSuggestions(row)" @keydown="onShortcutKeydown($event, row)" @blur="unlockCell(row, 'shortcut'); closeSuggestions(row)" placeholder="tv, cl..." class="input uppercase font-semibold tracking-wide">
                     <div v-if="row.showSuggestions && row.suggestions.length" class="suggestions">
