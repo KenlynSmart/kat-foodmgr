@@ -98,12 +98,23 @@
           </div>
         </div>
         <nav class="flex gap-1 overflow-x-auto pb-1">
-          <button v-for="tab in tabs" :key="tab.id" @click="currentTab = tab.id" class="tab-btn" :class="currentTab === tab.id ? 'tab-btn-active' : ''">
+          <button v-for="tab in visibleTabs" :key="tab.id" @click="currentTab = tab.id" class="tab-btn" :class="currentTab === tab.id ? 'tab-btn-active' : ''">
             <i class="mr-2" :class="tab.icon"></i>{{ tab.label }}
           </button>
         </nav>
       </div>
     </header>
+
+    <div v-if="subscriptionWarning" class="no-print border-b border-amber-300 bg-amber-100 px-4 py-3 text-amber-950">
+      <div class="mx-auto flex max-w-7xl items-center gap-3 text-sm font-semibold">
+        <i class="fa-solid fa-triangle-exclamation text-amber-600"></i>
+        <span>
+          Gói dịch vụ sắp hết hạn: Tài khoản của bạn còn
+          <strong>{{ subscriptionWarning.remainingDays }} ngày</strong>
+          sử dụng (Hạn chót: {{ subscriptionWarning.dueDate }}). Vui lòng nhập mã gia hạn trong trung tâm tài khoản.
+        </span>
+      </div>
+    </div>
 
     <div class="fixed top-4 right-4 z-[9999] flex flex-col gap-2 w-80 pointer-events-none no-print">
       <TransitionGroup name="notification" tag="div" class="flex flex-col gap-2">
@@ -180,6 +191,16 @@
               Đổi mật khẩu
             </button>
           </form>
+          <form v-if="!isAdmin && currentUser?.vendor_id" @submit.prevent="redeemSubscriptionCode" class="rounded-2xl border border-amber-200 bg-amber-50 p-4 md:col-span-2">
+            <h3 class="font-bold text-amber-950">Gia Hạn Hệ Thống</h3>
+            <p class="mt-1 text-sm text-amber-800">Nhập mã 30 ký tự do quản trị viên cấp để cộng thêm thời hạn sử dụng.</p>
+            <div class="mt-3 flex gap-2">
+              <input v-model.trim="renewalCode" class="input flex-1 uppercase" placeholder="VNFS-XXXX-XXXX-XXXX-XXXX-XXXX" required>
+              <button type="submit" class="btn-primary whitespace-nowrap" :disabled="redeemingCode">
+                {{ redeemingCode ? 'Đang xử lý...' : 'Gia hạn' }}
+              </button>
+            </div>
+          </form>
         </div>
       </div>
     </div>
@@ -227,7 +248,7 @@
         </button>
       </section>
 
-      <section v-show="currentTab === 'matrix'" class="space-y-6">
+      <section v-if="!isAdmin" v-show="currentTab === 'matrix'" class="space-y-6">
         <div class="panel flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
           <div>
             <h2 class="section-title">Ma trận nhập liệu</h2>
@@ -410,7 +431,7 @@
         </div>
       </section>
 
-      <section v-show="currentTab === 'analytics'" class="space-y-6">
+      <section v-if="!isAdmin" v-show="currentTab === 'analytics'" class="space-y-6">
         <div class="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
           <div>
             <h2 class="section-title">Báo Cáo Thống Kê</h2>
@@ -475,7 +496,7 @@
         </div>
       </section>
 
-      <section v-show="currentTab === 'parser'" class="grid lg:grid-cols-2 gap-6">
+      <section v-if="!isAdmin" v-show="currentTab === 'parser'" class="grid lg:grid-cols-2 gap-6">
         <div class="panel space-y-4">
           <div class="flex items-center justify-between gap-3">
             <div>
@@ -502,8 +523,8 @@
         </div>
       </section>
 
-      <section v-show="currentTab === 'catalog'" class="space-y-6">
-        <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+      <section v-show="currentTab === 'catalog' || (isAdmin && ['admin-vendors', 'admin-members'].includes(currentTab))" class="space-y-6">
+        <div v-if="!isAdmin" class="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div class="panel lg:col-span-1 space-y-4">
           <div class="flex items-center justify-between gap-3">
             <div>
@@ -682,9 +703,10 @@
               <option value="active">active</option>
               <option value="locked">locked</option>
             </select>
-            <button @click="createVendor" class="btn-primary justify-center" :disabled="vendorSaving">
-              {{ vendorSaving ? 'Đang tạo...' : 'Tạo vendor' }}
+            <button @click="saveVendor" class="btn-primary justify-center" :disabled="vendorSaving">
+              {{ vendorSaving ? 'Đang lưu...' : editingVendorId ? 'Lưu vendor' : 'Tạo vendor' }}
             </button>
+            <button v-if="editingVendorId" @click="editingVendorId = ''; vendorForm = { code: '', name: '', status: 'active' }" type="button" class="btn-secondary justify-center">Hủy sửa</button>
           </div>
           <div v-if="isAdmin" class="flex flex-col gap-2 md:flex-row md:items-center">
             <label class="text-sm font-semibold text-slate-600">Vendor đang quản lý</label>
@@ -694,6 +716,20 @@
                 {{ vendor.code }} — {{ vendor.name }} ({{ vendor.status }})
               </option>
             </select>
+          </div>
+          <div v-if="isAdmin" class="overflow-x-auto">
+            <table class="min-w-full text-sm">
+              <thead class="thead"><tr><th class="th">Mã</th><th class="th">Vendor</th><th class="th">Hạn dùng</th><th class="th">Trạng thái</th><th class="th"></th></tr></thead>
+              <tbody class="divide-y divide-slate-100">
+                <tr v-for="vendor in vendors" :key="vendor.id">
+                  <td class="px-3 py-2 font-semibold">{{ vendor.code || '—' }}</td>
+                  <td class="px-3 py-2">{{ vendor.name }}</td>
+                  <td class="px-3 py-2">{{ vendor.subscription_due_date || '—' }}</td>
+                  <td class="px-3 py-2">{{ vendor.subscription_status || vendor.status }}</td>
+                  <td class="px-3 py-2 text-right"><button @click="editVendor(vendor)" class="text-emerald-700">Sửa</button></td>
+                </tr>
+              </tbody>
+            </table>
           </div>
           <form @submit.prevent="provisionVendorUser" class="grid gap-3 rounded-2xl border border-emerald-100 bg-emerald-50 p-4 md:grid-cols-4">
             <input v-model="vendorUserForm.username" class="input" placeholder="Tên đăng nhập" required>
@@ -753,7 +789,53 @@
         </div>
       </section>
 
-      <section v-show="currentTab === 'stock'" class="panel space-y-4">
+      <section v-if="isAdmin" v-show="currentTab === 'admin-subscriptions'" class="space-y-6">
+        <div class="panel space-y-4">
+          <div>
+            <h2 class="section-title">Quản lý Gói Dịch Vụ</h2>
+            <p class="section-subtitle">Tạo mã gia hạn và theo dõi trạng thái sử dụng.</p>
+          </div>
+          <form @submit.prevent="generateSubscriptionCode" class="grid gap-3 rounded-2xl border border-emerald-100 bg-emerald-50 p-4 md:grid-cols-3">
+            <label>
+              <span class="mb-1 block text-sm font-semibold text-slate-600">Thời hạn (tháng)</span>
+              <input v-model.number="subscriptionCodeForm.duration_months" type="number" min="1" max="120" class="input" required>
+            </label>
+            <label>
+              <span class="mb-1 block text-sm font-semibold text-slate-600">Giá phân bổ (VND)</span>
+              <input v-model.number="subscriptionCodeForm.price_allocated" type="number" min="0" step="1000" class="input" required>
+            </label>
+            <button type="submit" class="btn-primary self-end justify-center" :disabled="subscriptionCodeGenerating">
+              {{ subscriptionCodeGenerating ? 'Đang tạo...' : 'Tạo mã VNFS' }}
+            </button>
+          </form>
+          <div class="overflow-x-auto">
+            <table class="min-w-full text-sm">
+              <thead class="thead"><tr><th class="th">Mã</th><th class="th">Thời hạn</th><th class="th">Giá</th><th class="th">Trạng thái</th><th class="th">Ngày tạo</th></tr></thead>
+              <tbody class="divide-y divide-slate-100">
+                <tr v-for="code in subscriptionCodes" :key="code.id">
+                  <td class="px-3 py-2 font-mono font-semibold">{{ code.code }}</td>
+                  <td class="px-3 py-2">{{ code.duration_months }} tháng</td>
+                  <td class="px-3 py-2">{{ money(code.price_allocated) }}</td>
+                  <td class="px-3 py-2"><span :class="code.is_used ? 'text-slate-400' : 'text-emerald-700'">{{ code.is_used ? 'Đã dùng' : 'Chưa dùng' }}</span></td>
+                  <td class="px-3 py-2">{{ code.created_at }}</td>
+                </tr>
+              </tbody>
+            </table>
+            <p v-if="!subscriptionCodes.length" class="py-8 text-center text-sm italic text-slate-400">Chưa có mã gia hạn.</p>
+          </div>
+        </div>
+      </section>
+
+      <section v-if="isAdmin" v-show="currentTab === 'admin-revenue'" class="space-y-6">
+        <div class="grid gap-4 md:grid-cols-4">
+          <div class="panel"><div class="text-sm text-slate-500">Doanh thu đã sử dụng</div><div class="mt-2 text-2xl font-extrabold text-emerald-700">{{ money(subscriptionMetrics.total_revenue) }}</div></div>
+          <div class="panel"><div class="text-sm text-slate-500">Vendor đang trả phí</div><div class="mt-2 text-2xl font-extrabold text-sky-700">{{ subscriptionMetrics.active_paid_vendors }}</div></div>
+          <div class="panel"><div class="text-sm text-slate-500">Tổng mã đã tạo</div><div class="mt-2 text-2xl font-extrabold text-violet-700">{{ subscriptionMetrics.generated_codes }}</div></div>
+          <div class="panel"><div class="text-sm text-slate-500">Mã đã sử dụng</div><div class="mt-2 text-2xl font-extrabold text-amber-700">{{ subscriptionMetrics.used_codes }}</div></div>
+        </div>
+      </section>
+
+      <section v-if="!isAdmin" v-show="currentTab === 'stock'" class="panel space-y-4">
         <div class="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
           <div>
             <h2 class="section-title">Quản Lý Tồn Kho</h2>
@@ -808,7 +890,7 @@
         </div>
       </section>
 
-      <section v-show="currentTab === 'receipts'" class="space-y-4">
+      <section v-if="!isAdmin" v-show="currentTab === 'receipts'" class="space-y-4">
         <div class="panel flex flex-wrap items-center justify-between gap-3 no-print">
           <div>
             <h2 class="section-title">Biên bản giao hàng</h2>
@@ -862,7 +944,7 @@
         </div>
       </section>
 
-      <section v-show="currentTab === 'debug'" class="terminal rounded-3xl border border-slate-800 shadow-xl overflow-hidden">
+      <section v-if="!isAdmin" v-show="currentTab === 'debug'" class="terminal rounded-3xl border border-slate-800 shadow-xl overflow-hidden">
         <div class="px-5 py-4 border-b border-slate-700 flex items-center justify-between gap-3">
           <div>
             <h2 class="text-lg font-bold text-white">Debug Console Terminal</h2>

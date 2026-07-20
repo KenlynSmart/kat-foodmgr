@@ -1,4 +1,5 @@
 import asyncio
+import calendar
 import os
 import secrets
 from contextvars import ContextVar
@@ -115,6 +116,17 @@ def _vendor_id(user: Optional[Dict[str, Any]] = None) -> Optional[str]:
     vendor_id = context.get("vendor_id")
     if not vendor_id:
         raise HTTPException(status_code=403, detail="Tài khoản chưa được gán vendor.")
+    system_vendor = (
+        require_read_client()
+        .table("vendors")
+        .select("id")
+        .eq("id", str(vendor_id))
+        .eq("code", "system")
+        .limit(1)
+        .execute()
+    ).data
+    if system_vendor:
+        raise HTTPException(status_code=403, detail="Tài khoản system không được truy cập dữ liệu vận hành vendor.")
     return str(vendor_id)
 
 
@@ -128,6 +140,37 @@ def _scope_payload(payload: Dict[str, Any], user: Optional[Dict[str, Any]] = Non
     if vendor_id is not None:
         payload["vendor_id"] = vendor_id
     return payload
+
+
+def _add_months(value: date, months: int) -> date:
+    month_index = value.month - 1 + months
+    year = value.year + month_index // 12
+    month = month_index % 12 + 1
+    return value.replace(year=year, month=month, day=min(value.day, calendar.monthrange(year, month)[1]))
+
+
+def _subscription_fields(vendor_id: Optional[str]) -> Dict[str, Any]:
+    if not vendor_id:
+        return {"subscription_due_date": None, "subscription_status": None}
+    response = (
+        require_read_client()
+        .table("vendors")
+        .select("subscription_due_date,subscription_status")
+        .eq("id", str(vendor_id))
+        .limit(1)
+        .execute()
+    )
+    fields = response.data[0] if response.data else {"subscription_due_date": None, "subscription_status": None}
+    due_date = fields.get("subscription_due_date")
+    if due_date and date.fromisoformat(str(due_date)) < date.today():
+        fields["subscription_status"] = "expired"
+    return fields
+
+
+def _new_subscription_code() -> str:
+    alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+    parts = ["".join(secrets.choice(alphabet) for _ in range(4)) for _ in range(5)]
+    return "VNFS-" + "-".join(parts)
 
 
 def _chunks(items: List[Dict[str, Any]]) -> List[List[Dict[str, Any]]]:
@@ -178,6 +221,8 @@ class VendorSchema(BaseModel):
 class VendorRecord(VendorSchema):
     id: UUID
     created_at: datetime
+    subscription_due_date: Optional[date] = None
+    subscription_status: Optional[str] = None
 
 
 class AssignVendorUserSchema(BaseModel):
@@ -196,7 +241,27 @@ class AuthUser(BaseModel):
     status: str
     vendor_id: Optional[UUID] = None
     vendor_name: Optional[str] = None
+    subscription_due_date: Optional[date] = None
+    subscription_status: Optional[str] = None
     must_change_password: bool = False
+
+
+class SubscriptionCodeCreateSchema(BaseModel):
+    duration_months: int = Field(default=1, ge=1, le=120)
+    price_allocated: float = Field(default=0, ge=0)
+
+
+class SubscriptionCodeRecord(SubscriptionCodeCreateSchema):
+    id: UUID
+    code: str
+    is_used: bool
+    used_by_vendor_id: Optional[UUID] = None
+    used_at: Optional[datetime] = None
+    created_at: datetime
+
+
+class RedeemCodeSchema(BaseModel):
+    code: str = Field(..., min_length=10, max_length=40)
 
 
 class AuthResponse(BaseModel):
@@ -234,6 +299,8 @@ def _auth_user_from_row(row: Dict[str, Any]) -> AuthUser:
         status=str(row["status"]),
         vendor_id=UUID(str(row["vendor_id"])) if row.get("vendor_id") else None,
         vendor_name=row.get("vendor_name"),
+        subscription_due_date=row.get("subscription_due_date"),
+        subscription_status=row.get("subscription_status"),
         must_change_password=bool(row.get("must_change_password", False)),
     )
 
@@ -281,6 +348,14 @@ PUBLIC_API_PATHS = {
     "/api/auth/google/callback",
 }
 
+OPERATIONAL_API_PREFIXES = (
+    "/api/products",
+    "/api/categories",
+    "/api/schools",
+    "/api/stock",
+    "/api/orders",
+)
+
 
 @app.middleware("http")
 async def protect_api_routes(request: Request, call_next):
@@ -293,6 +368,10 @@ async def protect_api_routes(request: Request, call_next):
         try:
             role = user.get("role", "staff")
             mutation = request.method in {"POST", "PUT", "PATCH", "DELETE"}
+            if role == "admin" and request.url.path.startswith(OPERATIONAL_API_PREFIXES):
+                if request.method == "GET":
+                    return JSONResponse(content=[])
+                return JSONResponse(status_code=403, content={"detail": "Admin chỉ quản lý hệ thống, không thao tác dữ liệu vendor."})
             catalog_mutation = any(
                 request.url.path.startswith(path)
                 for path in ("/api/products", "/api/categories", "/api/schools", "/api/auth/users")
@@ -577,6 +656,7 @@ async def login(credentials: LoginSchema):
             raise HTTPException(status_code=403, detail="Tài khoản đã bị khóa.")
         user["must_change_password"] = pin_matches
         user["vendor_name"] = _vendor_name_for_id(user.get("vendor_id"))
+        user.update(_subscription_fields(user.get("vendor_id")))
         return AuthResponse(
             access_token=_create_app_token(user),
             role=user["role"],
@@ -681,6 +761,7 @@ async def current_user(user: Dict[str, Any] = Depends(require_bearer_user)):
         record = response.data[0]
         record["must_change_password"] = bool(user.get("must_change_password", False))
         record["vendor_name"] = _vendor_name_for_id(record.get("vendor_id"))
+        record.update(_subscription_fields(record.get("vendor_id")))
         return _auth_user_from_row(record)
     except HTTPException:
         raise
@@ -714,13 +795,77 @@ async def list_vendors(_: Dict[str, Any] = Depends(require_admin_user)):
         response = (
             require_read_client()
             .table("vendors")
-            .select("id,code,name,status,created_at")
+            .select("id,code,name,status,created_at,subscription_due_date,subscription_status")
             .order("name")
             .execute()
         )
         return response.data or []
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Không thể tải danh sách vendor: {exc}") from exc
+
+
+@app.get("/api/admin/subscription-codes", response_model=List[SubscriptionCodeRecord])
+async def list_subscription_codes(_: Dict[str, Any] = Depends(require_admin_user)):
+    try:
+        response = (
+            require_read_client()
+            .table("subscription_codes")
+            .select("id,code,duration_months,price_allocated,is_used,used_by_vendor_id,used_at,created_at")
+            .order("created_at", desc=True)
+            .execute()
+        )
+        return response.data or []
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Không thể tải mã gia hạn: {exc}") from exc
+
+
+@app.post("/api/admin/subscription-codes", response_model=SubscriptionCodeRecord)
+async def create_subscription_code(
+    payload: SubscriptionCodeCreateSchema,
+    _: Dict[str, Any] = Depends(require_admin_user),
+):
+    record = {
+        "code": _new_subscription_code(),
+        "duration_months": payload.duration_months,
+        "price_allocated": payload.price_allocated,
+    }
+    try:
+        response = require_write_client().table("subscription_codes").insert(record).execute()
+        if not response.data:
+            raise HTTPException(status_code=400, detail="Không thể tạo mã gia hạn.")
+        return response.data[0]
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Không thể tạo mã gia hạn: {exc}") from exc
+
+
+@app.get("/api/admin/subscription-metrics")
+async def subscription_metrics(_: Dict[str, Any] = Depends(require_admin_user)):
+    try:
+        codes = (
+            require_read_client()
+            .table("subscription_codes")
+            .select("price_allocated,is_used")
+            .execute()
+        ).data or []
+        vendors = (
+            require_read_client()
+            .table("vendors")
+            .select("subscription_status,status")
+            .execute()
+        ).data or []
+        return {
+            "total_revenue": sum(float(row.get("price_allocated") or 0) for row in codes if row.get("is_used")),
+            "active_paid_vendors": sum(
+                1 for vendor in vendors
+                if vendor.get("status") == "active" and vendor.get("subscription_status") == "active"
+            ),
+            "generated_codes": len(codes),
+            "used_codes": sum(1 for row in codes if row.get("is_used")),
+        }
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Không thể tải doanh thu subscription: {exc}") from exc
 
 
 @app.post("/api/vendors", response_model=VendorRecord, status_code=status.HTTP_201_CREATED)
@@ -850,6 +995,76 @@ async def update_profile(
         raise
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Không thể cập nhật thông tin cá nhân: {exc}") from exc
+
+
+@app.post("/api/auth/redeem-code", response_model=AuthUser)
+async def redeem_subscription_code(
+    payload: RedeemCodeSchema,
+    user: Dict[str, Any] = Depends(require_bearer_user),
+):
+    vendor_id = _vendor_id(user)
+    if not vendor_id:
+        raise HTTPException(status_code=403, detail="Admin không sử dụng mã gia hạn vendor.")
+    code = payload.code.strip().upper()
+    try:
+        code_response = (
+            require_read_client()
+            .table("subscription_codes")
+            .select("id,code,duration_months,is_used")
+            .eq("code", code)
+            .limit(1)
+            .execute()
+        )
+        subscription_code = code_response.data[0] if code_response.data else None
+        if not subscription_code or subscription_code.get("is_used"):
+            raise HTTPException(status_code=400, detail="Mã gia hạn không tồn tại hoặc đã được sử dụng.")
+
+        vendor_response = (
+            require_read_client()
+            .table("vendors")
+            .select("id,subscription_due_date")
+            .eq("id", vendor_id)
+            .limit(1)
+            .execute()
+        )
+        vendor = vendor_response.data[0] if vendor_response.data else None
+        if not vendor:
+            raise HTTPException(status_code=404, detail="Vendor hiện tại không tồn tại.")
+        due_date = date.fromisoformat(str(vendor["subscription_due_date"])) if vendor.get("subscription_due_date") else date.today()
+        next_due_date = _add_months(max(date.today(), due_date), int(subscription_code["duration_months"]))
+        require_write_client().table("vendors").update({
+            "subscription_due_date": next_due_date.isoformat(),
+            "subscription_status": "active",
+        }).eq("id", vendor_id).execute()
+        used_response = (
+            require_write_client()
+            .table("subscription_codes")
+            .update({
+                "is_used": True,
+                "used_by_vendor_id": vendor_id,
+                "used_at": datetime.utcnow().isoformat(),
+            })
+            .eq("id", subscription_code["id"])
+            .eq("is_used", False)
+            .execute()
+        )
+        if not used_response.data:
+            raise HTTPException(status_code=409, detail="Mã vừa được sử dụng bởi phiên khác.")
+        record = (
+            require_read_client()
+            .table("users")
+            .select("id,username,nickname,email,provider,role,status,vendor_id")
+            .eq("id", user["sub"])
+            .limit(1)
+            .execute()
+        ).data[0]
+        record.update(_subscription_fields(vendor_id))
+        record["vendor_name"] = _vendor_name_for_id(vendor_id)
+        return _auth_user_from_row(record)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Không thể gia hạn vendor: {exc}") from exc
 
 
 @app.put("/api/auth/users/{user_id}", response_model=AuthUser)
