@@ -238,6 +238,22 @@ async def serve_styles_css():
     raise HTTPException(status_code=404, detail="styles.css not found")
 
 
+@app.get("/manifest.json")
+async def serve_manifest():
+    file_path = Path(__file__).with_name("manifest.json")
+    if file_path.exists():
+        return FileResponse(file_path, media_type="application/manifest+json")
+    raise HTTPException(status_code=404, detail="manifest.json not found")
+
+
+@app.get("/sw.js")
+async def serve_service_worker():
+    file_path = Path(__file__).with_name("sw.js")
+    if file_path.exists():
+        return FileResponse(file_path, media_type="application/javascript")
+    raise HTTPException(status_code=404, detail="sw.js not found")
+
+
 @app.get("/api/schools", response_model=List[SchoolRecord])
 async def get_schools():
     try:

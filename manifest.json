@@ -1,0 +1,24 @@
+{
+  "name": "VN Food v2.0 - Hệ Thống Phân Phối",
+  "short_name": "VN Food",
+  "description": "Quản lý phân bổ thực phẩm và điều phối đi chợ đám mây",
+  "start_url": "./",
+  "display": "standalone",
+  "background_color": "#f8fafc",
+  "theme_color": "#16a34a",
+  "orientation": "any",
+  "icons": [
+    {
+      "src": "https://cdn-icons-png.flaticon.com/512/5024/5024491.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "https://cdn-icons-png.flaticon.com/512/5024/5024491.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    }
+  ]
+}

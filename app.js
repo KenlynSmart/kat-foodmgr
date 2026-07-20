@@ -111,6 +111,8 @@ createApp({
     const lastSyncAt = ref('');
     const isSyncingManual = ref(false);
     const isSubmittingCategory = ref(false);
+    const deferredPrompt = ref(null);
+    const iosGuideDismissed = ref(false);
     const debugLogs = ref([]);
     const printSchoolId = ref('all');
     const editingProduct = ref(false);
@@ -145,6 +147,13 @@ createApp({
     const catalogReviewItems = ref([]);
     const catalogReviewCategories = ref([]);
     const catalogImportSummary = ref(null);
+
+    const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
+    const isStandalone = computed(() =>
+      window.matchMedia('(display-mode: standalone)').matches ||
+      window.navigator.standalone === true
+    );
+    const showIOSGuide = computed(() => isIOS && !isStandalone.value && !iosGuideDismissed.value);
 
     function generateShortcutFromName(name) {
       if (!name) return '';
@@ -967,6 +976,18 @@ createApp({
       } finally {
         isSyncingManual.value = false;
       }
+    }
+
+    async function installApp() {
+      if (!deferredPrompt.value) return;
+      const promptEvent = deferredPrompt.value;
+      deferredPrompt.value = null;
+      await promptEvent.prompt();
+      await promptEvent.userChoice;
+    }
+
+    function dismissIOSGuide() {
+      iosGuideDismissed.value = true;
     }
 
     function saveProduct() {
@@ -1879,6 +1900,24 @@ createApp({
     onMounted(() => {
       loadInitialState();
       setStatus('Sẵn sàng', 'Local cache', 'Chế độ đồng bộ thủ công. Bấm nút Đồng bộ dữ liệu để tải và lưu cloud.');
+      window.addEventListener('beforeinstallprompt', (event) => {
+        event.preventDefault();
+        deferredPrompt.value = event;
+      });
+      window.addEventListener('appinstalled', () => {
+        deferredPrompt.value = null;
+        console.info('[PWA] Ứng dụng đã được cài đặt.');
+      });
+      if ('serviceWorker' in navigator) {
+        navigator.serviceWorker.register('sw.js')
+          .then((registration) => {
+            console.info('[PWA] Service Worker đã đăng ký:', registration.scope);
+          })
+          .catch((error) => {
+            console.error('[PWA] Không thể đăng ký Service Worker:', error);
+            logError('serviceWorker.register', error);
+          });
+      }
       window.addEventListener('keydown', (event) => {
         if (event.key === 'F2' && currentTab.value === 'matrix') {
           event.preventDefault();
@@ -2016,6 +2055,10 @@ createApp({
       num,
       isSyncingManual,
       manuallySyncAllData,
+      deferredPrompt,
+      installApp,
+      showIOSGuide,
+      dismissIOSGuide,
       showCategoryDeleteModal,
       categoryToDelete,
       categoryDeleteConfirmText,
