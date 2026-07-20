@@ -110,6 +110,15 @@ createApp({
     const statusBanner = ref('');
     const lastSyncAt = ref('');
     const isSyncingManual = ref(false);
+    const authToken = ref(localStorage.getItem('auth_token') || '');
+    const isAuthenticated = computed(() => Boolean(authToken.value));
+    const currentUser = ref(null);
+    const users = ref([]);
+    const isAdmin = computed(() => currentUser.value?.role === 'admin');
+    const userListLoading = ref(false);
+    const loginForm = ref({ username: '', password: '' });
+    const authError = ref('');
+    const isLoggingIn = ref(false);
     const isSubmittingCategory = ref(false);
     const deferredPrompt = ref(null);
     const iosGuideDismissed = ref(false);
@@ -201,6 +210,15 @@ createApp({
       setTimeout(() => {
         toasts.value = toasts.value.filter((toast) => toast.id !== id);
       }, 3200);
+    }
+
+    function handleAuthCallback() {
+      const tokenParam = new URLSearchParams(window.location.search).get('auth_token');
+      if (!tokenParam) return false;
+      authToken.value = tokenParam;
+      localStorage.setItem('auth_token', tokenParam);
+      window.history.replaceState({}, document.title, window.location.pathname);
+      return true;
     }
 
     function markRowDirty(row) {
@@ -625,10 +643,12 @@ createApp({
     }
 
     async function apiJson(path, options = {}) {
+      const token = authToken.value;
       const response = await fetch(`${API_BASE}${path}`, {
         headers: {
           Accept: 'application/json',
           'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
           ...options.headers
         },
         ...options
@@ -645,6 +665,65 @@ createApp({
         throw new Error(detail);
       }
       return data;
+    }
+
+    async function loginWithCredentials() {
+      if (isLoggingIn.value) return;
+      authError.value = '';
+      isLoggingIn.value = true;
+      try {
+        const response = await apiJson('/api/auth/login', {
+          method: 'POST',
+          body: JSON.stringify(loginForm.value)
+        });
+        authToken.value = response.access_token;
+        localStorage.setItem('auth_token', response.access_token);
+        loginForm.value.password = '';
+        await loadAuthUser();
+        addToast(`Xin chào ${response.user.username}`, 'success');
+      } catch (error) {
+        authError.value = error.message || 'Đăng nhập thất bại.';
+      } finally {
+        isLoggingIn.value = false;
+      }
+    }
+
+    async function loginWithGoogle() {
+      if (isLoggingIn.value) return;
+      authError.value = '';
+      isLoggingIn.value = true;
+      try {
+        const response = await apiJson('/api/auth/google/url');
+        if (!response?.url) throw new Error('Backend không trả về URL Google OAuth.');
+        window.location.href = response.url;
+      } catch (error) {
+        authError.value = error.message || 'Không thể khởi động Google OAuth.';
+        isLoggingIn.value = false;
+      }
+    }
+
+    async function loadAuthUser() {
+      if (!authToken.value) return;
+      try {
+        currentUser.value = await apiJson('/api/auth/me');
+        if (currentUser.value.role === 'admin') {
+          userListLoading.value = true;
+          users.value = await apiJson('/api/auth/users');
+        }
+      } catch (error) {
+        logError('loadAuthUser', error);
+        logout();
+      } finally {
+        userListLoading.value = false;
+      }
+    }
+
+    function logout() {
+      authToken.value = '';
+      currentUser.value = null;
+      users.value = [];
+      localStorage.removeItem('auth_token');
+      authError.value = '';
     }
 
     async function fetchSchools() {
@@ -1898,7 +1977,9 @@ createApp({
     }, { deep: true });
 
     onMounted(() => {
+      handleAuthCallback();
       loadInitialState();
+      loadAuthUser();
       setStatus('Sẵn sàng', 'Local cache', 'Chế độ đồng bộ thủ công. Bấm nút Đồng bộ dữ liệu để tải và lưu cloud.');
       window.addEventListener('beforeinstallprompt', (event) => {
         event.preventDefault();
@@ -1975,6 +2056,17 @@ createApp({
       dataOrigin,
       lastSyncLabel,
       pendingMutationCount,
+      isAuthenticated,
+      currentUser,
+      users,
+      isAdmin,
+      userListLoading,
+      loginForm,
+      authError,
+      isLoggingIn,
+      loginWithCredentials,
+      loginWithGoogle,
+      logout,
       statusBanner,
       debugLogs,
       printSchoolId,
