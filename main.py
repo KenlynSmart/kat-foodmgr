@@ -95,6 +95,14 @@ class CategorySchema(BaseModel):
     name: str = Field(..., min_length=1, description="Tên nhóm hàng")
 
 
+class CategorySchemaWithId(CategorySchema):
+    id: UUID
+
+
+class ProductSchemaWithId(ProductSchema):
+    id: UUID
+
+
 class StockSchema(BaseModel):
     product_id: Optional[UUID] = Field(None, description="UUID của thực phẩm cần điều chỉnh")
     product_code: Optional[str] = Field(
@@ -376,6 +384,33 @@ async def delete_category(category_id: UUID):
         )
 
 
+@app.post("/api/categories/bulk-upsert")
+async def bulk_upsert_categories(categories_list: List[CategorySchemaWithId]):
+    if not categories_list:
+        return {"status": "success", "upserted_count": 0, "data": []}
+    try:
+        payload = jsonable_encoder(categories_list)
+        for item in payload:
+            item["name"] = item["name"].strip()
+            if not item["name"]:
+                raise HTTPException(status_code=422, detail="Tên nhóm hàng không được để trống.")
+        response = (
+            require_write_client()
+            .table("categories")
+            .upsert(payload, on_conflict="id")
+            .execute()
+        )
+        return {
+            "status": "success",
+            "upserted_count": len(response.data or []),
+            "data": response.data or [],
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Lỗi đồng bộ nhóm hàng hàng loạt: {exc}")
+
+
 @app.post("/api/products", status_code=status.HTTP_201_CREATED)
 async def create_product(product: ProductSchema):
     try:
@@ -418,6 +453,31 @@ async def create_products_bulk(products_list: List[ProductSchema]):
             status_code=500,
             detail=f"Nhập hàng loạt thực phẩm thất bại: {exc}",
         )
+
+
+@app.post("/api/products/bulk-upsert")
+async def bulk_upsert_products(products_list: List[ProductSchemaWithId]):
+    if not products_list:
+        return {"status": "success", "upserted_count": 0, "data": []}
+    try:
+        payload = jsonable_encoder(products_list)
+        for item in payload:
+            item["code"] = _code(item["code"])
+        response = (
+            require_write_client()
+            .table("products")
+            .upsert(payload, on_conflict="id")
+            .execute()
+        )
+        return {
+            "status": "success",
+            "upserted_count": len(response.data or []),
+            "data": response.data or [],
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Lỗi đồng bộ thực phẩm hàng loạt: {exc}")
 
 
 @app.delete("/api/products/{code}")

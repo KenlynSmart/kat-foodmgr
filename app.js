@@ -232,6 +232,11 @@ createApp({
     }
 
     const lastSyncLabel = computed(() => lastSyncAt.value || 'chưa có');
+    const pendingMutationCount = computed(() =>
+      rows.value.filter((row) => row.isDirty || dirtyRows.has(row.id)).length +
+      products.value.filter((product) => product.isDirty).length +
+      categories.value.filter((category) => category.isDirty).length
+    );
 
     function themeStyle(item) {
       const theme = themeMap[item?.bg_color] || themeMap['bg-sky-50'];
@@ -256,6 +261,15 @@ createApp({
       });
       Object.keys(row.schoolQtys).forEach((key) => {
         if (!schools.value.some((school) => schoolKey(school) === String(key))) delete row.schoolQtys[key];
+      });
+    }
+
+    function ensureMasterDirtyFlags() {
+      products.value.forEach((product) => {
+        if (product.isDirty === undefined) product.isDirty = false;
+      });
+      categories.value.forEach((category) => {
+        if (category.isDirty === undefined) category.isDirty = false;
       });
     }
 
@@ -688,6 +702,14 @@ createApp({
       return apiJson('/api/orders/bulk-upsert', { method: 'POST', body: JSON.stringify(payload) });
     }
 
+    async function bulkUpsertCategoriesApi(payload) {
+      return apiJson('/api/categories/bulk-upsert', { method: 'POST', body: JSON.stringify(payload) });
+    }
+
+    async function bulkUpsertProductsApi(payload) {
+      return apiJson('/api/products/bulk-upsert', { method: 'POST', body: JSON.stringify(payload) });
+    }
+
     async function clearOrdersApi(date) {
       return apiJson(`/api/orders?date=${encodeURIComponent(date)}`, { method: 'DELETE' });
     }
@@ -792,7 +814,8 @@ createApp({
             const next = {
               ...product,
               code: product.code || product.shortcut || '',
-              id: product.id || crypto.randomUUID()
+              id: product.id || crypto.randomUUID(),
+              isDirty: false
             };
             return [productKey(next), next];
           }));
@@ -811,7 +834,9 @@ createApp({
           byId.forEach((product) => nextProducts.push(product));
           products.value = nextProducts;
         }
-        if (Array.isArray(categoryRows)) categories.value = categoryRows;
+        if (Array.isArray(categoryRows)) {
+          categories.value = categoryRows.map((category) => ({ ...category, isDirty: false }));
+        }
         if (stockRows && typeof stockRows === 'object') stockMap.value = normalizeStockMap(stockRows);
         if (Array.isArray(orderRows)) applyOrderRows(orderRows);
         applyingRemote = false;
@@ -840,7 +865,7 @@ createApp({
       }));
     }
 
-    async function pushApiState(dirtyOrderRows) {
+    async function pushApiState(dirtyOrderRows, dirtyProductRecords, dirtyCategoryRecords) {
       for (const school of schools.value) {
         const previousId = schoolKey(school);
         const response = await saveSchoolApi({
@@ -862,36 +887,27 @@ createApp({
           school.id = saved.id;
         }
       }
-      for (const category of categories.value.filter((item) => item.name?.trim())) {
-        const response = await saveCategoryApi({ name: category.name.trim() });
-        const saved = response?.data || response;
-        if (saved?.id && String(saved.id) !== String(category.id)) {
-          products.value.forEach((product) => {
-            if (String(product.category_id) === String(category.id)) product.category_id = saved.id;
-          });
-          category.id = saved.id;
-        }
-      }
-      for (const product of products.value) {
-        const previousId = productKey(product);
-        const response = await saveProductApi({
-        code: product.code,
-        name: product.name,
-        unit: product.unit,
+      const categoryPayload = dirtyCategoryRecords.map((category) => ({
+        id: String(category.id),
+        name: category.name.trim()
+      }));
+      const productPayload = dirtyProductRecords.map((product) => ({
+        id: String(product.id),
+        code: norm(product.code),
+        name: product.name.trim(),
+        unit: product.unit.trim() || '-',
         price: num(product.price),
         category_id: product.category_id || null
-        });
-        const saved = response?.data || response;
-        if (saved?.id && String(saved.id) !== previousId) {
-          if (Object.prototype.hasOwnProperty.call(stockMap.value, previousId)) {
-            stockMap.value[saved.id] = stockMap.value[previousId];
-            delete stockMap.value[previousId];
-          }
-          rows.value.forEach((row) => {
-            if (String(row.productId || '') === previousId) row.productId = saved.id;
-          });
-          product.id = saved.id;
-        }
+      }));
+      const orderRecords = dirtyOrderRows.flatMap((row) => rowToDeltaOrderRecords(row));
+      const [categoryResponse, productResponse, orderResponse] = await Promise.all([
+        dirtyCategoryRecords.length ? bulkUpsertCategoriesApi(categoryPayload) : Promise.resolve(null),
+        dirtyProductRecords.length ? bulkUpsertProductsApi(productPayload) : Promise.resolve(null),
+        dirtyOrderRows.length ? bulkUpsertOrdersApi(orderRecords) : Promise.resolve(null)
+      ]);
+      for (const product of dirtyProductRecords) {
+        const previousId = productKey(product);
+        if (previousId) product.id = previousId;
       }
       const stockTasks = Object.entries(stockMap.value).map(([product_id, qtyValue]) => {
         const product = resolveProduct(product_id);
@@ -901,10 +917,10 @@ createApp({
         });
       });
       await Promise.all(stockTasks);
-      const orderRecords = dirtyOrderRows.flatMap((row) => rowToDeltaOrderRecords(row));
-      const response = await bulkUpsertOrdersApi(orderRecords);
+      dirtyCategoryRecords.forEach((category) => { category.isDirty = false; });
+      dirtyProductRecords.forEach((product) => { product.isDirty = false; });
       dirtyOrderRows.forEach((row) => clearRowDirty(row));
-      return response;
+      return { ...(orderResponse || {}), categoryResponse, productResponse };
     }
 
     async function syncNow() {
@@ -913,7 +929,9 @@ createApp({
       try {
         persistLocal();
         const dirtyOrderRows = rows.value.filter((row) => row.isDirty || dirtyRows.has(row.id));
-        if (!dirtyOrderRows.length) {
+        const dirtyProductRecords = products.value.filter((product) => product.isDirty);
+        const dirtyCategoryRecords = categories.value.filter((category) => category.isDirty);
+        if (!dirtyOrderRows.length && !dirtyProductRecords.length && !dirtyCategoryRecords.length) {
           addToast('Dữ liệu đã được tối ưu, không có gì cần đồng bộ thêm!', 'success');
           return;
         }
@@ -923,9 +941,10 @@ createApp({
           return;
         }
         setStatus('Đang đồng bộ', 'API', 'Đang đẩy local lên backend.');
-        const response = await pushApiState(dirtyOrderRows);
+        const response = await pushApiState(dirtyOrderRows, dirtyProductRecords, dirtyCategoryRecords);
         dirtyRows.clear();
-        addToast(`Đồng bộ thành công ${response?.upserted_count || 0} dòng thay đổi lên Cloud!`, 'success');
+        const changedCount = dirtyOrderRows.length + dirtyProductRecords.length + dirtyCategoryRecords.length;
+        addToast(`Đồng bộ thành công ${changedCount} bản ghi thay đổi lên Cloud!`, 'success');
       } catch (error) {
         logError('syncNow', error);
         addToast('Đồng bộ thất bại', 'error');
@@ -956,6 +975,7 @@ createApp({
       const existing = products.value.find((product) => norm(product.code) === code || norm(product.id) === code);
       const record = {
         id: existing?.id || crypto.randomUUID(),
+        isDirty: true,
         code,
         name: productForm.value.name.trim(),
         unit: productForm.value.unit.trim() || '-',
@@ -983,22 +1003,20 @@ createApp({
       productForm.value = { code: '', name: '', unit: '', price: 0, category_id: '' };
     }
 
-    async function saveCategory() {
+    function saveCategory() {
       const name = categoryForm.value.name.trim();
       if (!name) return;
       if (isSubmittingCategory.value) return;
       isSubmittingCategory.value = true;
       try {
-        const response = await saveCategoryApi({ name });
-        const category = response?.data || response;
-        const existingIndex = categories.value.findIndex((item) => String(item.id) === String(category.id) || norm(item.name) === norm(name));
-        if (existingIndex >= 0) categories.value[existingIndex] = { ...categories.value[existingIndex], ...category, name };
-        else categories.value.push({ ...category, id: category.id || crypto.randomUUID(), name, created_at: today });
+        const existingIndex = categories.value.findIndex((item) => norm(item.name) === norm(name));
+        if (existingIndex >= 0) {
+          categories.value[existingIndex] = { ...categories.value[existingIndex], name, isDirty: true };
+        } else {
+          categories.value.push({ id: crypto.randomUUID(), name, isDirty: true, created_at: today });
+        }
         categoryForm.value = { name: '' };
         scheduleSync();
-      } catch (error) {
-        logError('saveCategory', error);
-        addToast(`Không thể lưu nhóm hàng: ${error.message}`, 'error');
       } finally {
         isSubmittingCategory.value = false;
       }
@@ -1009,15 +1027,12 @@ createApp({
       categoryDraftName.value = category.name;
     }
 
-    async function updateCategory(category) {
+    function updateCategory(category) {
       const name = categoryDraftName.value.trim();
       if (!name) return;
       try {
-        const response = await updateCategoryApi(category.id, { name });
-        const updated = response?.data || response;
-        const nextName = updated?.name || name;
         const index = categories.value.findIndex((item) => String(item.id) === String(category.id));
-        if (index >= 0) categories.value[index] = { ...categories.value[index], ...updated, name: nextName };
+        if (index >= 0) categories.value[index] = { ...categories.value[index], name, isDirty: true };
         editingCategoryId.value = '';
         categoryDraftName.value = '';
         scheduleSync();
@@ -1852,6 +1867,7 @@ createApp({
     function loadInitialState() {
       skipNextSync = true;
       hydrateLocal();
+      ensureMasterDirtyFlags();
       recalcAllRows();
       nextTick(() => { skipNextSync = false; });
     }
@@ -1872,6 +1888,12 @@ createApp({
       window.addEventListener('offline', () => {
           setStatus('Offline', 'Local cache', 'Đang offline; dữ liệu được giữ ở local.');
           addToast('Mất kết nối mạng', 'warn');
+      });
+      window.addEventListener('beforeunload', (event) => {
+        if (pendingMutationCount.value > 0) {
+          event.preventDefault();
+          event.returnValue = 'Bạn có dữ liệu chưa đồng bộ lên Cloud. Bạn có chắc chắn muốn rời đi?';
+        }
       });
       window.addEventListener('afterprint', () => {
         printSchoolId.value = 'all';
@@ -1913,6 +1935,7 @@ createApp({
       syncStatus,
       dataOrigin,
       lastSyncLabel,
+      pendingMutationCount,
       statusBanner,
       debugLogs,
       printSchoolId,
