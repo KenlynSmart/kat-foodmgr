@@ -18,6 +18,42 @@
 </head>
 <body class="bg-slate-50 text-slate-800">
   <div id="app" v-cloak class="min-h-screen flex flex-col">
+    <section v-if="!isAuthenticated" class="min-h-screen flex items-center justify-center bg-gradient-to-br from-emerald-700 via-emerald-600 to-teal-700 p-4">
+      <div class="w-full max-w-md rounded-3xl bg-white p-6 shadow-2xl sm:p-8">
+        <div class="mb-6 text-center">
+          <div class="mx-auto mb-4 grid h-16 w-16 place-items-center rounded-3xl bg-emerald-100 text-emerald-700">
+            <i class="fa-solid fa-bowl-food text-3xl"></i>
+          </div>
+          <h1 class="text-2xl font-extrabold text-slate-900">VN Food v2.0</h1>
+          <p class="mt-1 text-sm text-slate-500">Đăng nhập để tiếp tục quản lý phân phối</p>
+        </div>
+        <form @submit.prevent="loginWithCredentials" class="space-y-4">
+          <label class="block">
+            <span class="mb-1 block text-sm font-semibold text-slate-700">Tên đăng nhập</span>
+            <input v-model.trim="loginForm.username" class="input w-full" autocomplete="username" required>
+          </label>
+          <label class="block">
+            <span class="mb-1 block text-sm font-semibold text-slate-700">Mật khẩu</span>
+            <input v-model="loginForm.password" type="password" class="input w-full" autocomplete="current-password" required>
+          </label>
+          <p v-if="authError" class="rounded-xl bg-rose-50 px-3 py-2 text-sm text-rose-700">{{ authError }}</p>
+          <button type="submit" class="btn-primary w-full justify-center" :disabled="isLoggingIn">
+            <i class="fa-solid" :class="isLoggingIn ? 'fa-spinner fa-spin' : 'fa-right-to-bracket'"></i>
+            {{ isLoggingIn ? 'Đang xác thực...' : 'Đăng nhập' }}
+          </button>
+        </form>
+        <div class="my-5 flex items-center gap-3 text-xs font-semibold text-slate-400">
+          <span class="h-px flex-1 bg-slate-200"></span>
+          HOẶC
+          <span class="h-px flex-1 bg-slate-200"></span>
+        </div>
+        <button @click="loginWithGoogle" class="flex w-full items-center justify-center gap-3 rounded-xl border border-slate-200 bg-white px-4 py-3 font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50" :disabled="isLoggingIn">
+          <i class="fab fa-google text-red-500"></i>
+          Đăng nhập bằng Google
+        </button>
+      </div>
+    </section>
+    <template v-else>
     <header class="no-print sticky top-0 z-40 bg-emerald-700 text-white shadow-lg">
       <div class="max-w-7xl mx-auto px-4 py-4 flex flex-col gap-3">
         <div class="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3">
@@ -43,6 +79,10 @@
             <button v-if="deferredPrompt" @click="installApp" class="btn-ghost">
               <i class="fa-solid fa-mobile-screen-button"></i>
               Cài đặt Ứng dụng
+            </button>
+            <button @click="logout" class="btn-ghost">
+              <i class="fa-solid fa-right-from-bracket"></i>
+              Đăng xuất
             </button>
             <button @click="copyDebugLogs" class="btn-ghost">Sao chép log</button>
           </div>
@@ -417,6 +457,34 @@
             </table>
           </div>
         </div>
+        <div v-if="isAdmin" class="panel space-y-4 border-2 border-emerald-200">
+          <div class="flex items-center justify-between gap-3">
+            <div>
+              <h2 class="section-title">Quản Lý Tài Khoản</h2>
+              <p class="section-subtitle">Danh sách tài khoản đang có trong hệ thống.</p>
+            </div>
+            <span v-if="userListLoading" class="text-sm text-slate-500">
+              <i class="fa-solid fa-spinner fa-spin"></i> Đang tải
+            </span>
+            <span v-else class="badge">{{ users.length }} tài khoản</span>
+          </div>
+          <div class="overflow-x-auto">
+            <table class="min-w-full text-sm">
+              <thead class="thead">
+                <tr><th class="th">Tên đăng nhập</th><th class="th">Email</th><th class="th">Provider</th><th class="th">Vai trò</th><th class="th">Trạng thái</th></tr>
+              </thead>
+              <tbody class="divide-y divide-slate-100">
+                <tr v-for="user in users" :key="user.id">
+                  <td class="px-3 py-2 font-semibold">{{ user.username }}</td>
+                  <td class="px-3 py-2">{{ user.email || '—' }}</td>
+                  <td class="px-3 py-2">{{ user.provider }}</td>
+                  <td class="px-3 py-2">{{ user.role }}</td>
+                  <td class="px-3 py-2">{{ user.status }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
       </section>
 
       <section v-show="currentTab === 'stock'" class="panel space-y-4">
@@ -711,6 +779,7 @@
         </div>
       </div>
     </div>
+    </template>
   </div>
 </body>
 </html>

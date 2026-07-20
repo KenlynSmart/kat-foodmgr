@@ -1,13 +1,16 @@
 import os
+import secrets
 from pathlib import Path
 from datetime import date, datetime
 from typing import Any, Dict, List, Optional
 from uuid import UUID
 
-from fastapi import FastAPI, HTTPException, status
+import jwt
+from fastapi import Depends, FastAPI, HTTPException, Query, Request, status
 from fastapi.encoders import jsonable_encoder
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
+from passlib.context import CryptContext
 from pydantic import BaseModel, Field
 from supabase import Client, create_client
 
@@ -34,6 +37,15 @@ SUPABASE_ANON_KEY = os.environ.get(
     "sb_publishable_3g8a4d68v1XWEs86b-zckg_00OAZmMt",
 )
 SUPABASE_SERVICE_ROLE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
+AUTH_JWT_SECRET = os.environ.get("AUTH_JWT_SECRET") or secrets.token_urlsafe(32)
+AUTH_JWT_ALGORITHM = "HS256"
+AUTH_JWT_EXPIRE_MINUTES = int(os.environ.get("AUTH_JWT_EXPIRE_MINUTES", "720"))
+GOOGLE_OAUTH_REDIRECT_URI = os.environ.get(
+    "GOOGLE_OAUTH_REDIRECT_URI",
+    "https://kat-foodmgr-backend.onrender.com/api/auth/google/callback",
+)
+FRONTEND_URL = os.environ.get("FRONTEND_URL", "/")
+password_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 try:
     supabase_read: Optional[Client] = (
@@ -72,6 +84,124 @@ def require_read_client() -> Client:
             detail="Supabase read client chưa được cấu hình.",
         )
     return supabase_read
+
+
+class LoginSchema(BaseModel):
+    username: str
+    password: str
+
+
+class AuthUser(BaseModel):
+    id: UUID
+    username: str
+    email: Optional[str] = None
+    provider: str
+    role: str
+    status: str
+
+
+class AuthResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    user: AuthUser
+
+
+def _create_app_token(user: Dict[str, Any]) -> str:
+    now = datetime.utcnow()
+    payload = {
+        "sub": str(user["id"]),
+        "username": user["username"],
+        "role": user["role"],
+        "iat": now,
+        "exp": now.timestamp() + AUTH_JWT_EXPIRE_MINUTES * 60,
+    }
+    return jwt.encode(payload, AUTH_JWT_SECRET, algorithm=AUTH_JWT_ALGORITHM)
+
+
+def _auth_user_from_row(row: Dict[str, Any]) -> AuthUser:
+    return AuthUser(
+        id=UUID(str(row["id"])),
+        username=str(row["username"]),
+        email=row.get("email"),
+        provider=str(row["provider"]),
+        role=str(row["role"]),
+        status=str(row["status"]),
+    )
+
+
+async def seed_local_users() -> None:
+    if not supabase_write:
+        print("[CẢNH BÁO] Bỏ qua seed users: thiếu SUPABASE_SERVICE_ROLE_KEY.")
+        return
+    try:
+        existing = (
+            supabase_write.table("users")
+            .select("id")
+            .eq("provider", "local")
+            .limit(1)
+            .execute()
+        )
+        if existing.data:
+            return
+        payload = [
+            {
+                "username": "admin",
+                "password": password_context.hash("admin"),
+                "provider": "local",
+                "role": "admin",
+                "status": "active",
+            },
+            {
+                "username": "ktrinh",
+                "password": password_context.hash("ktrinh"),
+                "provider": "local",
+                "role": "staff",
+                "status": "active",
+            },
+        ]
+        supabase_write.table("users").insert(jsonable_encoder(payload)).execute()
+        print("[INFO] Đã seed tài khoản local mặc định.")
+    except Exception as exc:
+        print(f"[CẢNH BÁO] Không thể seed users: {exc}")
+
+
+@app.on_event("startup")
+async def startup_seed_users() -> None:
+    await seed_local_users()
+
+
+def require_bearer_user(request: Request) -> Dict[str, Any]:
+    authorization = request.headers.get("Authorization", "")
+    scheme, _, token = authorization.partition(" ")
+    if scheme.lower() != "bearer" or not token:
+        raise HTTPException(status_code=401, detail="Thiếu token xác thực.")
+    try:
+        return jwt.decode(token, AUTH_JWT_SECRET, algorithms=[AUTH_JWT_ALGORITHM])
+    except jwt.PyJWTError as exc:
+        raise HTTPException(status_code=401, detail="Token xác thực không hợp lệ.") from exc
+
+
+def require_admin_user(user: Dict[str, Any] = Depends(require_bearer_user)) -> Dict[str, Any]:
+    if user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Chỉ quản trị viên mới có quyền này.")
+    return user
+
+
+PUBLIC_API_PATHS = {
+    "/api/auth/login",
+    "/api/auth/google/url",
+    "/api/auth/google/callback",
+}
+
+
+@app.middleware("http")
+async def protect_api_routes(request: Request, call_next):
+    if request.url.path.startswith("/api/") and request.url.path not in PUBLIC_API_PATHS:
+        try:
+            require_bearer_user(request)
+        except HTTPException as exc:
+            return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+    return await call_next(request)
 
 
 class SchoolSchema(BaseModel):
@@ -202,6 +332,144 @@ def _lookup_id_by_code(table: str, code_field: str, code: str) -> Optional[str]:
     if response.data:
         return str(response.data[0]["id"])
     return None
+
+
+@app.post("/api/auth/login", response_model=AuthResponse)
+async def login(credentials: LoginSchema):
+    try:
+        response = (
+            require_read_client()
+            .table("users")
+            .select("id,username,password,email,provider,role,status")
+            .eq("username", credentials.username.strip())
+            .eq("provider", "local")
+            .limit(1)
+            .execute()
+        )
+        user = response.data[0] if response.data else None
+        if (
+            not user
+            or not user.get("password")
+            or not password_context.verify(credentials.password, user["password"])
+        ):
+            raise HTTPException(status_code=401, detail="Tên đăng nhập hoặc mật khẩu không đúng.")
+        if user["status"] != "active":
+            raise HTTPException(status_code=403, detail="Tài khoản đã bị khóa.")
+        return AuthResponse(access_token=_create_app_token(user), user=_auth_user_from_row(user))
+    except HTTPException:
+        raise
+    except Exception as exc:
+        print(f"[CẢNH BÁO] Login backend error: {exc}")
+        raise HTTPException(status_code=503, detail="Dịch vụ xác thực chưa sẵn sàng.") from exc
+
+
+@app.get("/api/auth/google/url")
+async def google_login_url():
+    try:
+        response = require_read_client().auth.sign_in_with_oauth(
+            {
+                "provider": "google",
+                "options": {"redirect_to": GOOGLE_OAUTH_REDIRECT_URI},
+            }
+        )
+        return {"url": response.url}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        print(f"[CẢNH BÁO] Google OAuth URL error: {exc}")
+        raise HTTPException(status_code=503, detail="Google OAuth chưa được cấu hình.") from exc
+
+
+@app.get("/api/auth/google/callback")
+async def google_callback(
+    code: Optional[str] = Query(default=None),
+    access_token: Optional[str] = Query(default=None),
+):
+    try:
+        auth_user = None
+        if code:
+            auth_response = require_read_client().auth.exchange_code_for_session(
+                {"auth_code": code}
+            )
+            auth_user = auth_response.user
+        elif access_token:
+            auth_response = require_read_client().auth.get_user(access_token)
+            auth_user = auth_response.user if auth_response else None
+        if not auth_user or not auth_user.email:
+            raise HTTPException(status_code=400, detail="Không nhận được email Google hợp lệ.")
+
+        email = auth_user.email.strip().lower()
+        client = require_write_client()
+        existing = (
+            client.table("users")
+            .select("id,username,password,email,provider,role,status")
+            .eq("email", email)
+            .limit(1)
+            .execute()
+        )
+        user = existing.data[0] if existing.data else None
+        if not user:
+            created = (
+                client.table("users")
+                .insert(
+                    {
+                        "username": email,
+                        "email": email,
+                        "provider": "google",
+                        "role": "staff",
+                        "status": "active",
+                    }
+                )
+                .execute()
+            )
+            user = created.data[0] if created.data else None
+        if not user or user["status"] != "active":
+            raise HTTPException(status_code=403, detail="Tài khoản Google chưa được kích hoạt.")
+
+        token = _create_app_token(user)
+        separator = "&" if "?" in FRONTEND_URL else "?"
+        redirect_url = f"{FRONTEND_URL}{separator}auth_token={token}"
+        return RedirectResponse(url=redirect_url, status_code=302)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        print(f"[CẢNH BÁO] Google OAuth callback error: {exc}")
+        raise HTTPException(status_code=503, detail="Google OAuth callback chưa sẵn sàng.") from exc
+
+
+@app.get("/api/auth/me", response_model=AuthUser)
+async def current_user(user: Dict[str, Any] = Depends(require_bearer_user)):
+    try:
+        response = (
+            require_read_client()
+            .table("users")
+            .select("id,username,email,provider,role,status")
+            .eq("id", user["sub"])
+            .limit(1)
+            .execute()
+        )
+        if not response.data:
+            raise HTTPException(status_code=401, detail="Tài khoản không còn tồn tại.")
+        return _auth_user_from_row(response.data[0])
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Không thể tải tài khoản: {exc}") from exc
+
+
+@app.get("/api/auth/users", response_model=List[AuthUser])
+async def list_users(_: Dict[str, Any] = Depends(require_admin_user)):
+    try:
+        response = (
+            require_read_client()
+            .table("users")
+            .select("id,username,email,provider,role,status")
+            .order("created_at")
+            .execute()
+        )
+        return [_auth_user_from_row(row) for row in response.data or []]
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Không thể tải danh sách tài khoản: {exc}") from exc
 
 
 @app.get("/", response_class=HTMLResponse)
