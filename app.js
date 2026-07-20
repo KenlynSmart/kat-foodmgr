@@ -61,6 +61,7 @@ createApp({
       unit: '',
       price: 0,
       schoolQtys: {},
+      schoolBatches: {},
       totalQty: 0,
       subTotal: 0,
       suggestions: [],
@@ -164,6 +165,8 @@ createApp({
     const catalogReviewItems = ref([]);
     const catalogReviewCategories = ref([]);
     const catalogImportSummary = ref(null);
+    const batchPopover = ref({ open: false, rowId: '', schoolId: '', position: {} });
+    const batchForm = ref({ qtyChange: '', notePreset: 'Đợt bổ sung chiều', note: '' });
 
     const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
     const isStandalone = computed(() =>
@@ -291,12 +294,15 @@ createApp({
       if (row.isDirty === undefined) row.isDirty = false;
       if (row.searchQuery === undefined) row.searchQuery = row.shortcut || '';
       if (!row.schoolQtys) row.schoolQtys = {};
+      if (!row.schoolBatches) row.schoolBatches = {};
       schools.value.forEach((school) => {
         const key = schoolKey(school);
         if (row.schoolQtys[key] === undefined) row.schoolQtys[key] = 0;
+        if (!Array.isArray(row.schoolBatches[key])) row.schoolBatches[key] = [];
       });
       Object.keys(row.schoolQtys).forEach((key) => {
         if (!schools.value.some((school) => schoolKey(school) === String(key))) delete row.schoolQtys[key];
+        if (!schools.value.some((school) => schoolKey(school) === String(key))) delete row.schoolBatches[key];
       });
     }
 
@@ -404,9 +410,77 @@ createApp({
       }
     }
 
+    function openBatchPopover(row, school, event) {
+      const schoolId = schoolKey(school);
+      ensureRowSchools(row);
+      ensureDefaultBatch(row, schoolId);
+      const rect = event.currentTarget.getBoundingClientRect();
+      batchPopover.value = {
+        open: true,
+        rowId: row.id,
+        schoolId,
+        position: {
+          top: `${rect.bottom + window.scrollY + 4}px`,
+          left: `${Math.min(rect.left + window.scrollX, Math.max(16, window.scrollX + window.innerWidth - 280))}px`
+        }
+      };
+      batchForm.value = { qtyChange: '', notePreset: 'Đợt bổ sung chiều', note: '' };
+    }
+
+    function closeBatchPopover() {
+      batchPopover.value.open = false;
+    }
+
+    function activeBatchRow() {
+      return rows.value.find((row) => row.id === batchPopover.value.rowId);
+    }
+
+    function activeBatchList() {
+      const row = activeBatchRow();
+      return row?.schoolBatches?.[batchPopover.value.schoolId] || [];
+    }
+
+    function applyBatchAdjustment() {
+      const row = activeBatchRow();
+      const amount = num(batchForm.value.qtyChange);
+      if (!row || !amount) return;
+      const note = batchForm.value.notePreset === 'Khác'
+        ? batchForm.value.note.trim()
+        : batchForm.value.notePreset;
+      if (!note) return;
+      const schoolId = batchPopover.value.schoolId;
+      ensureRowSchools(row);
+      ensureDefaultBatch(row, schoolId);
+      row.schoolBatches[schoolId].push({
+        id: uid(),
+        qty_change: round3(amount),
+        note
+      });
+      row.schoolQtys[schoolId] = batchTotal(row.schoolBatches[schoolId]);
+      recalcRow(row);
+      markRowDirty(row);
+      scheduleSync();
+      batchForm.value = { qtyChange: '', notePreset: 'Đợt bổ sung chiều', note: '' };
+    }
+
+    function deleteBatch(batchId) {
+      const row = activeBatchRow();
+      if (!row) return;
+      const schoolId = batchPopover.value.schoolId;
+      row.schoolBatches[schoolId] = activeBatchList().filter((batch) => batch.id !== batchId);
+      row.schoolQtys[schoolId] = batchTotal(row.schoolBatches[schoolId]);
+      recalcRow(row);
+      markRowDirty(row);
+      scheduleSync();
+    }
+
     function addRow() {
       const row = emptyRow();
-      schools.value.forEach((school) => { row.schoolQtys[schoolKey(school)] = 0; });
+      schools.value.forEach((school) => {
+        const schoolId = schoolKey(school);
+        row.schoolQtys[schoolId] = 0;
+        row.schoolBatches[schoolId] = [];
+      });
       rows.value.push(row);
       scheduleSync();
     }
@@ -422,16 +496,34 @@ createApp({
       scheduleSync();
     }
 
+    function batchTotal(batches) {
+      return round3((batches || []).reduce((sum, batch) => sum + num(batch.qty_change), 0));
+    }
+
+    function ensureDefaultBatch(row, schoolId) {
+      const batches = row.schoolBatches[schoolId];
+      if (!batches.length && num(row.schoolQtys[schoolId])) {
+        row.schoolBatches[schoolId] = [{
+          id: uid(),
+          qty_change: round3(row.schoolQtys[schoolId]),
+          note: 'Đợt sáng mặc định'
+        }];
+      }
+      return row.schoolBatches[schoolId];
+    }
+
     function rowToOrderRecords(row) {
       const product = resolveProduct(row.productId || row.shortcut);
       if (!product) return [];
       return schools.value.flatMap((school) => {
-        const qtyValue = num(row.schoolQtys?.[schoolKey(school)]);
-        return qtyValue > 0 ? [{
+        const schoolId = schoolKey(school);
+        const qtyValue = num(row.schoolQtys?.[schoolId]);
+        return qtyValue !== 0 ? [{
           delivery_date: deliveryDate.value,
           product_id: productKey(product),
-          school_id: schoolKey(school),
-          qty: round3(qtyValue)
+          school_id: schoolId,
+          qty: round3(qtyValue),
+          batches: row.schoolBatches?.[schoolId] || []
         }] : [];
       });
     }
@@ -453,7 +545,20 @@ createApp({
           }
           schools.value.forEach((school) => { map[productId].schoolQtys[schoolKey(school)] = 0; });
         }
-        map[productId].schoolQtys[String(order.school_id)] = num(order.qty);
+        const schoolId = String(order.school_id);
+        map[productId].schoolQtys[schoolId] = num(order.qty);
+        map[productId].schoolBatches[schoolId] = (order.batches || []).map((batch) => ({
+          id: batch.id || uid(),
+          qty_change: round3(batch.qty_change),
+          note: batch.note || ''
+        }));
+        if (!map[productId].schoolBatches[schoolId].length && num(order.qty)) {
+          map[productId].schoolBatches[schoolId] = [{
+            id: uid(),
+            qty_change: round3(order.qty),
+            note: 'Đợt sáng mặc định'
+          }];
+        }
       });
       return Object.values(map).map((row) => {
         recalcRow(row);
@@ -641,7 +746,11 @@ createApp({
           products.value = clone(defaultProducts);
           stockMap.value = clone(defaultStock);
           rows.value.forEach((row) => {
-            schools.value.forEach((school) => { row.schoolQtys[schoolKey(school)] = 0; });
+            schools.value.forEach((school) => {
+              const schoolId = schoolKey(school);
+              row.schoolQtys[schoolId] = 0;
+              row.schoolBatches[schoolId] = [];
+            });
           });
           return;
         }
@@ -1051,7 +1160,8 @@ createApp({
         delivery_date: deliveryDate.value,
         product_id: String(productKey(product)),
         school_id: String(schoolKey(school)),
-        qty: round3(row.schoolQtys?.[schoolKey(school)])
+        qty: round3(row.schoolQtys?.[schoolKey(school)]),
+        batches: row.schoolBatches?.[schoolKey(school)] || []
       }));
     }
 
@@ -1334,6 +1444,7 @@ createApp({
       rows.value.forEach((row) => {
         const rowKey = schoolKey(record);
         if (!row.schoolQtys[rowKey]) row.schoolQtys[rowKey] = 0;
+        if (!row.schoolBatches[rowKey]) row.schoolBatches[rowKey] = [];
       });
       resetSchoolForm();
       scheduleSync();
@@ -1380,6 +1491,10 @@ createApp({
         if (row.schoolQtys) {
           delete row.schoolQtys[id];
           if (target) delete row.schoolQtys[schoolKey(target)];
+        }
+        if (row.schoolBatches) {
+          delete row.schoolBatches[id];
+          if (target) delete row.schoolBatches[schoolKey(target)];
         }
         recalcRow(row);
       });
@@ -2224,6 +2339,13 @@ createApp({
       suggestionStyle,
       closeSuggestions,
       pickProduct,
+      batchPopover,
+      batchForm,
+      openBatchPopover,
+      closeBatchPopover,
+      activeBatchList,
+      applyBatchAdjustment,
+      deleteBatch,
       recalcRow,
       applyParser,
       fillParserFromClipboard,
