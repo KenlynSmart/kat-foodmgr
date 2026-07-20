@@ -35,6 +35,8 @@
             <button @click="manuallySyncAllData" :disabled="isSyncingManual" class="btn-ghost disabled:opacity-60">
               <i class="fas fa-sync" :class="isSyncingManual ? 'animate-spin' : ''"></i>
               {{ isSyncingManual ? 'Đang đồng bộ...' : 'Đồng bộ dữ liệu' }}
+              <span v-if="pendingMutationCount" class="ml-1 rounded-full bg-amber-400 px-1.5 py-0.5 text-[10px] font-bold text-amber-950">{{ pendingMutationCount }}</span>
+              <i v-else class="fa-solid fa-circle-check ml-1 text-emerald-200"></i>
             </button>
             <button @click="copyDebugLogs" class="btn-ghost">Sao chép log</button>
           </div>
@@ -251,7 +253,7 @@
               <tbody class="divide-y divide-slate-100">
                 <tr v-for="category in filteredCategories" :key="category.id">
                   <td class="px-3 py-2">
-                    <input v-if="editingCategoryId === category.id" v-model="categoryDraftName" class="input">
+                    <input v-if="editingCategoryId === category.id" v-model="categoryDraftName" @input="category.isDirty = true" class="input">
                     <span v-else class="font-semibold">{{ category.name }} <span class="text-xs text-slate-400">({{ categoryProductCount(category.id) }} mặt hàng)</span></span>
                   </td>
                   <td class="px-3 py-2 text-right whitespace-nowrap">
