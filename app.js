@@ -1701,7 +1701,7 @@ createApp({
       }
 
       let activeDateContext = null;
-      const allocationPayloads = [];
+      const uniqueRecordsMap = new Map();
       const dateContexts = new Set();
       let skippedRows = 0;
 
@@ -1733,16 +1733,30 @@ createApp({
           continue;
         }
 
-        allocationPayloads.push({
+        const qty = round3(num(row[4]));
+        const productId = String(matchedProduct.id);
+        const schoolId = String(targetSchool.id);
+        const compoundKey = `${activeDateContext}_${productId}_${schoolId}`;
+        const existingRecord = uniqueRecordsMap.get(compoundKey);
+        if (existingRecord) {
+          existingRecord.qty = round3(existingRecord.qty + qty);
+          console.info(
+            `[Ingestion Aggregator] Summed duplicate item line: ${shortcut} on ${activeDateContext} -> ${existingRecord.qty}`
+          );
+          continue;
+        }
+
+        uniqueRecordsMap.set(compoundKey, {
           delivery_date: activeDateContext,
-          product_id: String(matchedProduct.id),
-          school_id: String(targetSchool.id),
-          qty: round3(num(row[4]))
+          product_id: productId,
+          school_id: schoolId,
+          qty
         });
       }
 
+      const allocationPayloads = Array.from(uniqueRecordsMap.values());
       console.info(
-        `[Ingestion Core] Parsing complete. Successfully harvested ${allocationPayloads.length} total active order entries.`
+        `[Ingestion Core] Parsing complete. Aggregation layer compiled ${allocationPayloads.length} distinct database records.`
       );
 
       return {
