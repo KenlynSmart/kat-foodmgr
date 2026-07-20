@@ -1531,13 +1531,22 @@ createApp({
     async function pullApiState(categoryRowsOverride = null) {
       try {
         setStatus('Đang đồng bộ', 'API', 'Đang lấy dữ liệu mới từ backend.');
-        const [schoolRows, productRows, categoryRows, stockRows, orderRows] = await Promise.all([
+        const results = await Promise.allSettled([
           fetchSchools(),
           fetchProducts(),
           Array.isArray(categoryRowsOverride) ? Promise.resolve(categoryRowsOverride) : fetchCategories(),
           fetchStock(),
           fetchOrders(deliveryDate.value)
         ]);
+        const [schoolResult, productResult, categoryResult, stockResult, orderResult] = results;
+        results.forEach((result, index) => {
+          if (result.status === 'rejected') logError(`pullApiState:${index}`, result.reason);
+        });
+        const schoolRows = schoolResult.status === 'fulfilled' ? schoolResult.value : [];
+        const productRows = productResult.status === 'fulfilled' ? productResult.value : [];
+        const categoryRows = categoryResult.status === 'fulfilled' ? categoryResult.value : [];
+        const stockRows = stockResult.status === 'fulfilled' ? stockResult.value : {};
+        const orderRows = orderResult.status === 'fulfilled' ? orderResult.value : [];
 
         skipNextSync = true;
         applyingRemote = true;
@@ -1620,13 +1629,23 @@ createApp({
 
     async function initializeAuthenticatedState() {
       if (!authToken.value) return;
+      if (isAdmin.value || currentUser.value?.username === 'admin') {
+        currentTab.value = 'admin-vendors';
+        setStatus('Sẵn sàng', 'System Admin', 'Chế độ quản trị hệ thống.');
+        return;
+      }
       try {
-        const categoryRows = await fetchCategories();
+        const categoryRows = await fetchCategories().catch((error) => {
+          logError('initializeAuthenticatedState:categories', error);
+          return [];
+        });
         applyCategoryRows(categoryRows);
         await pullApiState(categoryRows);
       } catch (error) {
         logError('initializeAuthenticatedState', error);
         addToast('Không thể tải dữ liệu khởi tạo', 'error');
+      } finally {
+        setStatus('Sẵn sàng', 'Local cache', 'Chế độ đồng bộ thủ công. Bấm nút Đồng bộ dữ liệu để tải và lưu cloud.');
       }
     }
 
