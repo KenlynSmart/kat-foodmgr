@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>VN Food v2.0</title>
+  <title>VNFS-Portal</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
@@ -25,7 +25,7 @@
           <div class="mx-auto mb-4 grid h-16 w-16 place-items-center rounded-3xl bg-emerald-100 text-emerald-700">
             <i class="fa-solid fa-bowl-food text-3xl"></i>
           </div>
-          <h1 class="text-2xl font-extrabold text-slate-900">VN Food v2.0</h1>
+          <h1 class="text-2xl font-extrabold text-slate-900">VNFS-Portal</h1>
           <p class="mt-1 text-sm text-slate-500">Đăng nhập để tiếp tục quản lý phân phối</p>
         </div>
         <form @submit.prevent="loginWithCredentials" class="space-y-4">
@@ -62,9 +62,11 @@
             <div class="w-11 h-11 rounded-2xl bg-white text-emerald-700 grid place-items-center shadow-inner">
               <i class="fa-solid fa-bowl-food text-xl"></i>
             </div>
-            <div>
-              <h1 class="text-xl font-extrabold tracking-tight">VN Food v2.0</h1>
-              <p class="text-xs text-emerald-100">Tách CSS/JavaScript riêng, đồng bộ local ↔ API</p>
+            <div class="flex flex-col">
+              <span class="text-xl font-bold tracking-tight text-white">VNFS-Portal</span>
+              <span class="text-xs font-extrabold uppercase tracking-wider text-emerald-200 bg-emerald-900/40 px-2 py-0.5 rounded-md w-fit mt-0.5 shadow-sm">
+                {{ currentVendorName }}
+              </span>
             </div>
           </div>
           <div class="flex flex-wrap items-center gap-2 text-xs">
@@ -109,7 +111,10 @@
         class="pointer-events-auto flex items-center gap-3 rounded-xl border border-slate-100 bg-white p-4 shadow-xl text-sm"
         :class="notification.type === 'success' ? 'text-emerald-800' : notification.type === 'error' ? 'text-rose-800' : notification.type === 'warn' ? 'text-amber-800' : 'text-slate-800'">
         <i class="fa-solid" :class="notification.type === 'success' ? 'fa-circle-check text-emerald-600' : notification.type === 'error' ? 'fa-circle-xmark text-rose-600' : 'fa-circle-info text-slate-500'"></i>
-        <span>{{ notification.message }}</span>
+        <span class="flex-1">{{ notification.message }}</span>
+        <button @click="dismissNotification(notification.id)" class="shrink-0 p-1 text-slate-400 transition hover:text-slate-900" aria-label="Đóng thông báo">
+          <i class="fas fa-times"></i>
+        </button>
       </div>
       </TransitionGroup>
     </div>
@@ -212,8 +217,14 @@
     </div>
 
     <main class="flex-1 max-w-7xl w-full mx-auto p-4 lg:p-6 space-y-6">
-      <section v-if="statusBanner" class="rounded-2xl border border-amber-200 bg-amber-50 text-amber-900 px-4 py-3 text-sm">
-        {{ statusBanner }}
+      <section v-if="statusBanner" class="flex items-center justify-between rounded-2xl border border-amber-200 bg-amber-50 text-amber-800 px-4 py-3 text-sm">
+        <div class="flex items-center gap-2 font-medium">
+          <i class="fas fa-info-circle text-amber-600"></i>
+          <span>{{ statusBanner }}</span>
+        </div>
+        <button @click="dismissStatusBanner" class="p-1 text-amber-500 transition hover:text-amber-900" aria-label="Đóng thông báo">
+          <i class="fas fa-times"></i>
+        </button>
       </section>
 
       <section v-show="currentTab === 'matrix'" class="space-y-6">
