@@ -80,6 +80,10 @@
               <i class="fa-solid fa-mobile-screen-button"></i>
               Cài đặt Ứng dụng
             </button>
+            <button @click="openUserCPModal" class="btn-ghost flex items-center gap-2">
+              <i class="fas fa-user-circle text-emerald-200 text-lg"></i>
+              <span>{{ currentUser?.nickname || currentUser?.username || '' }}</span>
+            </button>
             <button @click="logout" class="btn-ghost">
               <i class="fa-solid fa-right-from-bracket"></i>
               Đăng xuất
@@ -119,6 +123,51 @@
         <button @click="dismissIOSGuide" class="text-slate-400 hover:text-slate-700" aria-label="Đóng hướng dẫn">
           <i class="fa-solid fa-xmark"></i>
         </button>
+      </div>
+    </div>
+
+    <div v-if="showUserCPModal" class="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/70 p-4 no-print">
+      <div class="w-full max-w-2xl rounded-2xl bg-white p-6 shadow-2xl">
+        <div class="flex items-center justify-between gap-3">
+          <div>
+            <h2 class="text-xl font-bold text-slate-900">Trung Tâm Tài Khoản</h2>
+            <p class="text-sm text-slate-500">{{ currentUser?.username || '' }}</p>
+          </div>
+          <button @click="closeUserCPModal" class="text-slate-400 hover:text-slate-700" aria-label="Đóng">
+            <i class="fa-solid fa-xmark text-xl"></i>
+          </button>
+        </div>
+        <p v-if="userCPError" class="mt-4 rounded-xl bg-rose-50 px-3 py-2 text-sm text-rose-700">{{ userCPError }}</p>
+        <div class="mt-5 grid gap-5 md:grid-cols-2">
+          <form @submit.prevent="saveUserProfile" class="rounded-2xl border border-slate-200 p-4">
+            <h3 class="font-bold text-slate-800">Cập nhật thông tin cá nhân</h3>
+            <label class="mt-4 block">
+              <span class="mb-1 block text-sm font-semibold text-slate-600">Tên hiển thị</span>
+              <input v-model="userForm.nickname" class="input" maxlength="100" placeholder="Tên hiển thị">
+            </label>
+            <button type="submit" class="btn-primary mt-4 w-full justify-center" :disabled="userCPSaving">
+              Lưu thay đổi
+            </button>
+          </form>
+          <form @submit.prevent="changePassword" class="rounded-2xl border border-slate-200 p-4">
+            <h3 class="font-bold text-slate-800">Đổi mật khẩu bảo mật</h3>
+            <label class="mt-4 block">
+              <span class="mb-1 block text-sm font-semibold text-slate-600">Mật khẩu hiện tại</span>
+              <input v-model="passwordForm.oldPassword" type="password" class="input" autocomplete="current-password" required>
+            </label>
+            <label class="mt-3 block">
+              <span class="mb-1 block text-sm font-semibold text-slate-600">Mật khẩu mới</span>
+              <input v-model="passwordForm.newPassword" type="password" class="input" minlength="8" autocomplete="new-password" required>
+            </label>
+            <label class="mt-3 block">
+              <span class="mb-1 block text-sm font-semibold text-slate-600">Xác nhận mật khẩu mới</span>
+              <input v-model="passwordForm.confirmPassword" type="password" class="input" minlength="8" autocomplete="new-password" required>
+            </label>
+            <button type="submit" class="btn-primary mt-4 w-full justify-center" :disabled="userCPSaving">
+              Đổi mật khẩu
+            </button>
+          </form>
+        </div>
       </div>
     </div>
 
@@ -177,9 +226,9 @@
                     {{ (matrixPage - 1) * pageSize + index + 1 }}
                   </td>
                   <td class="px-3 py-3 relative">
-                    <input v-model="row.shortcut" @input="onShortcutInput(row)" @focus="lockCell(row, 'shortcut'); openSuggestions(row, $event)" @keydown="onShortcutKeydown($event, row)" @blur="unlockCell(row, 'shortcut'); closeSuggestions(row)" placeholder="tv, cl..." class="input uppercase font-semibold tracking-wide">
+                    <input v-model="row.searchQuery" @input="onShortcutInput(row)" @focus="lockCell(row, 'shortcut'); openSuggestions(row, $event)" @keydown="onShortcutKeydown($event, row)" @blur="unlockCell(row, 'shortcut'); closeSuggestions(row)" placeholder="tv, cl..." class="input uppercase font-semibold tracking-wide">
                     <teleport to="body">
-                      <div v-if="row.showSuggestions && row.suggestions.length" :style="suggestionStyle(row)" class="suggestions absolute z-50 left-0 mt-1 bg-white shadow-2xl border border-slate-200 rounded-xl overflow-y-auto max-h-60 w-[300px] xs:w-[380px] sm:w-[520px] md:w-[650px]">
+                      <div v-if="row.showDropdown && row.suggestions.length" :style="suggestionStyle(row)" class="suggestions absolute z-50 left-0 mt-1 bg-white shadow-2xl border border-slate-200 rounded-xl overflow-y-auto max-h-60 w-[300px] xs:w-[380px] sm:w-[520px] md:w-[650px]">
                         <button v-for="(product, idx) in row.suggestions" :key="product.code" @mousedown.prevent="pickProduct(row, product)" class="suggestion-item grid grid-cols-12 gap-2 items-center px-4 py-2.5 cursor-pointer border-b border-slate-100 hover:bg-emerald-50 transition-colors duration-150 last:border-0" :class="idx === row.suggestIndex ? 'bg-emerald-50' : ''">
                           <span class="col-span-2 text-center font-bold tracking-wide text-xs bg-emerald-100 text-emerald-800 rounded-md px-1.5 py-0.5 uppercase truncate">{{ product.code }}</span>
                           <span class="col-span-5 text-slate-700 font-medium truncate text-left">{{ product.name }}</span>
@@ -478,11 +527,12 @@
           <div class="overflow-x-auto">
             <table class="min-w-full text-sm">
               <thead class="thead">
-                <tr><th class="th">Tên đăng nhập</th><th class="th">Email</th><th class="th">Provider</th><th class="th">Vai trò</th><th class="th">Trạng thái</th></tr>
+                <tr><th class="th">Tên đăng nhập</th><th class="th">Tên hiển thị</th><th class="th">Email</th><th class="th">Provider</th><th class="th">Vai trò</th><th class="th">Trạng thái</th></tr>
               </thead>
               <tbody class="divide-y divide-slate-100">
                 <tr v-for="user in users" :key="user.id">
                   <td class="px-3 py-2 font-semibold">{{ user.username }}</td>
+                  <td class="px-3 py-2">{{ user.nickname || '—' }}</td>
                   <td class="px-3 py-2">{{ user.email || '—' }}</td>
                   <td class="px-3 py-2">{{ user.provider }}</td>
                   <td class="px-3 py-2">{{ user.role }}</td>
