@@ -1705,8 +1705,10 @@ createApp({
       const dateContexts = new Set();
       let skippedRows = 0;
 
-      sheetData.forEach((row) => {
-        if (!Array.isArray(row) || row.length === 0) return;
+      console.info(`[Ingestion Core] Starting parsing engine for total raw rows: ${sheetData.length}`);
+      for (let index = 0; index < sheetData.length; index += 1) {
+        const row = sheetData[index];
+        if (!Array.isArray(row) || row.length === 0) continue;
 
         const dateAnchor = String(row[0] ?? '').trim();
         const dateMatch = dateAnchor.match(/ngày\s+(\d{1,2})\/(\d{1,2})\/(\d{2})/i);
@@ -1714,20 +1716,21 @@ createApp({
           const [, day, month, year] = dateMatch;
           activeDateContext = `20${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`;
           dateContexts.add(activeDateContext);
+          console.info(`[Ingestion Core] Switched active date anchor to: ${activeDateContext}`);
         }
 
         const shortcut = norm(row[1]);
-        if (!shortcut || shortcut === 'nan') return;
+        if (!shortcut || shortcut === 'nan') continue;
         if (!activeDateContext) {
           skippedRows += 1;
-          return;
+          continue;
         }
 
         const matchedProduct = products.value.find((product) => norm(product.code || product.shortcut) === shortcut);
         if (!matchedProduct?.id) {
           skippedRows += 1;
-          console.warn(`[Ingestion Debug] Shortcut không tồn tại trong danh mục gốc: ${shortcut}`);
-          return;
+          console.warn(`[Ingestion Warning] Shortcut '${shortcut}' không tồn tại trong danh mục gốc. Bỏ qua dòng.`);
+          continue;
         }
 
         allocationPayloads.push({
@@ -1736,7 +1739,11 @@ createApp({
           school_id: String(targetSchool.id),
           qty: round3(num(row[4]))
         });
-      });
+      }
+
+      console.info(
+        `[Ingestion Core] Parsing complete. Successfully harvested ${allocationPayloads.length} total active order entries.`
+      );
 
       return {
         allocationPayloads,
@@ -1752,7 +1759,11 @@ createApp({
         const buffer = await file.arrayBuffer();
         const workbook = window.XLSX.read(buffer, { type: 'array' });
         const sheet = workbook.Sheets[workbook.SheetNames[0]];
-        const matrix = window.XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
+        const matrix = window.XLSX.utils.sheet_to_json(sheet, {
+          header: 1,
+          blankrows: true,
+          defval: ''
+        });
         const hasDateAnchors = matrix.some((row) => /ngày\s+\d{1,2}\/\d{1,2}\/\d{2}/i.test(String(row?.[0] ?? '')));
         if (hasDateAnchors) {
           const { allocationPayloads, dateContexts, skippedRows } = parseSingleSchoolMultiDateExcel(
