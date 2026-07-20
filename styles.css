@@ -141,29 +141,43 @@ body {
 
 .suggestions {
   position: absolute;
-  z-index: 20;
-  margin-top: 0.25rem;
-  left: 0.75rem;
-  right: 0.75rem;
-  border-radius: 0.75rem;
-  border: 1px solid #e2e8f0;
-  background: #fff;
-  box-shadow: 0 10px 15px -3px rgba(15, 23, 42, 0.1);
-  overflow: hidden;
+  max-width: calc(100vw - 2rem);
+  min-width: 300px;
+  max-height: 15rem;
 }
 
 .suggestion-item {
   width: 100%;
-  padding: 0.5rem 0.75rem;
-  text-align: left;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  font-size: 0.75rem;
+  background: #fff;
 }
 
 .suggestion-item:hover {
   background: #ecfdf5;
+}
+
+@media (min-width: 480px) {
+  .suggestions {
+    width: 380px;
+  }
+}
+
+@media (min-width: 640px) {
+  .suggestions {
+    width: 520px;
+  }
+}
+
+@media (min-width: 768px) {
+  .suggestions {
+    width: 650px;
+    max-width: min(650px, calc(100vw - 2rem));
+  }
+}
+
+@media (orientation: landscape) and (max-height: 600px) {
+  .suggestions {
+    max-height: 10rem;
+  }
 }
 
 .terminal {
