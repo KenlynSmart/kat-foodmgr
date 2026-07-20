@@ -120,13 +120,17 @@ createApp({
     const isAuthenticated = computed(() => Boolean(authToken.value));
     const currentUser = ref(null);
     const users = ref([]);
+    const vendors = ref([]);
+    const selectedVendorId = ref('');
+    const vendorForm = ref({ code: '', name: '', status: 'active' });
+    const vendorSaving = ref(false);
     const isAdmin = computed(() => currentUser.value?.role === 'admin');
     const userRole = computed(() => currentUser.value?.role || 'staff');
     const canManageCatalog = computed(() => ['admin', 'owner', 'manager'].includes(userRole.value));
     const canMutate = computed(() => userRole.value !== 'report-viewer');
     const mustChangePassword = ref(false);
     const userListLoading = ref(false);
-    const vendorUserForm = ref({ username: '', nickname: '', role: 'staff' });
+    const vendorUserForm = ref({ username: '', nickname: '', role: 'staff', vendor_id: '' });
     const vendorUserProvisioning = ref(false);
     const provisionedPin = ref('');
     const loginForm = ref({ username: '', password: '' });
@@ -966,6 +970,12 @@ createApp({
         mustChangePassword.value = Boolean(currentUser.value?.must_change_password);
         showPasswordOnboarding.value = mustChangePassword.value;
         if (['admin', 'owner', 'manager'].includes(currentUser.value.role)) {
+          if (currentUser.value.role === 'admin') {
+            vendors.value = await apiJson('/api/vendors');
+            selectedVendorId.value = vendors.value[0]?.id || '';
+          } else {
+            selectedVendorId.value = currentUser.value.vendor_id || '';
+          }
           userListLoading.value = true;
           users.value = await apiJson('/api/auth/users');
         }
@@ -1015,18 +1025,64 @@ createApp({
       userCPError.value = '';
       provisionedPin.value = '';
       try {
+        const vendorId = isAdmin.value ? selectedVendorId.value : currentUser.value?.vendor_id;
+        if (!vendorId) throw new Error('Hãy chọn vendor trước khi tạo tài khoản.');
         const response = await apiJson('/api/auth/users', {
           method: 'POST',
-          body: JSON.stringify(vendorUserForm.value)
+          body: JSON.stringify({ ...vendorUserForm.value, vendor_id: vendorId })
         });
         provisionedPin.value = response.temporary_pin || '';
-        vendorUserForm.value = { username: '', nickname: '', role: 'staff' };
+        vendorUserForm.value = { username: '', nickname: '', role: 'staff', vendor_id: vendorId };
         users.value = await apiJson('/api/auth/users');
         addToast('Đã tạo tài khoản vendor với PIN tạm thời.', 'success');
       } catch (error) {
         userCPError.value = error.message || 'Không thể tạo tài khoản vendor.';
       } finally {
         vendorUserProvisioning.value = false;
+      }
+    }
+
+    async function createVendor() {
+      if (vendorSaving.value) return;
+      vendorSaving.value = true;
+      userCPError.value = '';
+      try {
+        const created = await apiJson('/api/vendors', {
+          method: 'POST',
+          body: JSON.stringify(vendorForm.value)
+        });
+        vendors.value = [...vendors.value, created].sort((left, right) => left.name.localeCompare(right.name));
+        selectedVendorId.value = created.id;
+        vendorForm.value = { code: '', name: '', status: 'active' };
+        users.value = await apiJson('/api/auth/users');
+        addToast('Đã tạo vendor mới.', 'success');
+      } catch (error) {
+        userCPError.value = error.message || 'Không thể tạo vendor.';
+      } finally {
+        vendorSaving.value = false;
+      }
+    }
+
+    async function selectVendor(vendorId) {
+      selectedVendorId.value = vendorId;
+    }
+
+    async function saveUserAssignment(user) {
+      if (!isAdmin.value || !user?.vendor_id) return;
+      try {
+        const updated = await apiJson(`/api/auth/users/${encodeURIComponent(user.id)}`, {
+          method: 'PUT',
+          body: JSON.stringify({
+            vendor_id: user.vendor_id,
+            role: user.role,
+            status: user.status
+          })
+        });
+        const index = users.value.findIndex((item) => item.id === updated.id);
+        if (index >= 0) users.value[index] = updated;
+        addToast(`Đã gán ${updated.username} vào vendor.`, 'success');
+      } catch (error) {
+        userCPError.value = error.message || 'Không thể cập nhật phân quyền vendor.';
       }
     }
 
@@ -2562,6 +2618,10 @@ createApp({
       isAuthenticated,
       currentUser,
       users,
+      vendors,
+      selectedVendorId,
+      vendorForm,
+      vendorSaving,
       isAdmin,
       userRole,
       canManageCatalog,
@@ -2585,6 +2645,9 @@ createApp({
       closeUserCPModal,
       saveUserProfile,
       provisionVendorUser,
+      createVendor,
+      selectVendor,
+      saveUserAssignment,
       changePassword,
       submitPasswordOnboarding,
       analyticsRange,
