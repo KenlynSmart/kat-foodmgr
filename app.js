@@ -1051,6 +1051,11 @@ createApp({
         authToken.value = response.access_token;
         localStorage.setItem('auth_token', response.access_token);
         loginForm.value.password = '';
+        currentUser.value = response.user;
+        setActiveVendor(currentUser.value);
+        currentTab.value = currentUser.value?.role === 'admin' ? 'admin-vendors' : 'matrix';
+        mustChangePassword.value = Boolean(response.must_change_password || currentUser.value?.must_change_password);
+        showPasswordOnboarding.value = mustChangePassword.value;
         await loadAuthUser();
         if (!authToken.value) {
           throw new Error('Phiên đăng nhập không hợp lệ.');
@@ -1059,8 +1064,6 @@ createApp({
           loadInitialState();
           await initializeAuthenticatedState();
         }
-        mustChangePassword.value = Boolean(response.must_change_password || currentUser.value?.must_change_password);
-        showPasswordOnboarding.value = mustChangePassword.value;
         addToast(`Xin chào ${response.user.username}`, 'success');
       } catch (error) {
         authError.value = error.message || 'Đăng nhập thất bại.';
