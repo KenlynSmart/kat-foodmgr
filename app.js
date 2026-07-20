@@ -1694,6 +1694,57 @@ createApp({
       stageSingleSchoolRows(records, schoolHint);
     }
 
+    function parseSingleSchoolMultiDateExcel(sheetData, targetSchoolId) {
+      const targetSchool = resolveSchool(targetSchoolId);
+      if (!targetSchool?.id) {
+        throw new Error('Không xác định được trường đích hợp lệ để đồng bộ dữ liệu đa ngày.');
+      }
+
+      let activeDateContext = null;
+      const allocationPayloads = [];
+      const dateContexts = new Set();
+      let skippedRows = 0;
+
+      sheetData.forEach((row) => {
+        if (!Array.isArray(row) || row.length === 0) return;
+
+        const dateAnchor = String(row[0] ?? '').trim();
+        const dateMatch = dateAnchor.match(/ngày\s+(\d{1,2})\/(\d{1,2})\/(\d{2})/i);
+        if (dateMatch) {
+          const [, day, month, year] = dateMatch;
+          activeDateContext = `20${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`;
+          dateContexts.add(activeDateContext);
+        }
+
+        const shortcut = norm(row[1]);
+        if (!shortcut || shortcut === 'nan') return;
+        if (!activeDateContext) {
+          skippedRows += 1;
+          return;
+        }
+
+        const matchedProduct = products.value.find((product) => norm(product.code || product.shortcut) === shortcut);
+        if (!matchedProduct?.id) {
+          skippedRows += 1;
+          console.warn(`[Ingestion Debug] Shortcut không tồn tại trong danh mục gốc: ${shortcut}`);
+          return;
+        }
+
+        allocationPayloads.push({
+          delivery_date: activeDateContext,
+          product_id: String(matchedProduct.id),
+          school_id: String(targetSchool.id),
+          qty: round3(num(row[4]))
+        });
+      });
+
+      return {
+        allocationPayloads,
+        dateContexts,
+        skippedRows
+      };
+    }
+
     async function handleSingleSchoolExcelUpload(event) {
       const file = event.target.files?.[0];
       if (!file || !window.XLSX) return;
@@ -1702,6 +1753,27 @@ createApp({
         const workbook = window.XLSX.read(buffer, { type: 'array' });
         const sheet = workbook.Sheets[workbook.SheetNames[0]];
         const matrix = window.XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
+        const hasDateAnchors = matrix.some((row) => /ngày\s+\d{1,2}\/\d{1,2}\/\d{2}/i.test(String(row?.[0] ?? '')));
+        if (hasDateAnchors) {
+          const { allocationPayloads, dateContexts, skippedRows } = parseSingleSchoolMultiDateExcel(
+            matrix,
+            singleSchoolImportSchoolId.value
+          );
+          if (!allocationPayloads.length) {
+            throw new Error('Không tìm thấy bản ghi sản phẩm hợp lệ trong các khối ngày của tệp.');
+          }
+
+          await bulkUpsertOrdersApi(allocationPayloads);
+          await fetchDailyOrders(deliveryDate.value);
+          persistLocal();
+          closeSingleSchoolImportModal();
+          const skippedSuffix = skippedRows ? ` Bỏ qua ${skippedRows} dòng không khớp danh mục.` : '';
+          addToast(
+            `Nạp tệp thành công! Đã đồng bộ ${allocationPayloads.length} bản ghi của trường lên hệ thống qua ${dateContexts.size} ngày dữ liệu.${skippedSuffix}`,
+            'success'
+          );
+          return;
+        }
         parseSingleSchoolSheet(matrix, file.name, singleSchoolImportSchoolId.value);
         if (!showNewProductsModal.value) closeSingleSchoolImportModal();
       } catch (error) {
