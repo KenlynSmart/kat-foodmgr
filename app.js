@@ -738,6 +738,14 @@ createApp({
       return apiJson('/api/categories');
     }
 
+    function applyCategoryRows(categoryRows) {
+      if (!Array.isArray(categoryRows)) return;
+      categories.value = categoryRows.map((category) => ({
+        ...category,
+        isDirty: false
+      }));
+    }
+
     async function fetchStock() {
       return apiJson('/api/stock');
     }
@@ -860,13 +868,13 @@ createApp({
       await fetchDailyOrders();
     }
 
-    async function pullApiState() {
+    async function pullApiState(categoryRowsOverride = null) {
       try {
         setStatus('Đang đồng bộ', 'API', 'Đang lấy dữ liệu mới từ backend.');
         const [schoolRows, productRows, categoryRows, stockRows, orderRows] = await Promise.all([
           fetchSchools(),
           fetchProducts(),
-          fetchCategories(),
+          Array.isArray(categoryRowsOverride) ? Promise.resolve(categoryRowsOverride) : fetchCategories(),
           fetchStock(),
           fetchOrders(deliveryDate.value)
         ]);
@@ -923,7 +931,7 @@ createApp({
           products.value = nextProducts;
         }
         if (Array.isArray(categoryRows)) {
-          categories.value = categoryRows.map((category) => ({ ...category, isDirty: false }));
+          applyCategoryRows(categoryRows);
         }
         if (stockRows && typeof stockRows === 'object') stockMap.value = normalizeStockMap(stockRows);
         if (Array.isArray(orderRows)) applyOrderRows(orderRows);
@@ -939,6 +947,18 @@ createApp({
         addToast('Không lấy được dữ liệu từ backend', 'error');
         setStatus('Offline', 'Local cache', 'Backend không khả dụng; đang dùng local cache.');
         return false;
+      }
+    }
+
+    async function initializeAuthenticatedState() {
+      if (!authToken.value) return;
+      try {
+        const categoryRows = await fetchCategories();
+        applyCategoryRows(categoryRows);
+        await pullApiState(categoryRows);
+      } catch (error) {
+        logError('initializeAuthenticatedState', error);
+        addToast('Không thể tải dữ liệu khởi tạo', 'error');
       }
     }
 
@@ -1976,10 +1996,11 @@ createApp({
       persistLocal();
     }, { deep: true });
 
-    onMounted(() => {
+    onMounted(async () => {
       handleAuthCallback();
       loadInitialState();
-      loadAuthUser();
+      await loadAuthUser();
+      await initializeAuthenticatedState();
       setStatus('Sẵn sàng', 'Local cache', 'Chế độ đồng bộ thủ công. Bấm nút Đồng bộ dữ liệu để tải và lưu cloud.');
       window.addEventListener('beforeinstallprompt', (event) => {
         event.preventDefault();
