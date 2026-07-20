@@ -6,6 +6,13 @@ CREATE TABLE IF NOT EXISTS vendors (
     created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
 );
 
+ALTER TABLE vendors ADD COLUMN IF NOT EXISTS code TEXT;
+ALTER TABLE vendors ADD COLUMN IF NOT EXISTS name TEXT;
+ALTER TABLE vendors ADD COLUMN IF NOT EXISTS status TEXT;
+ALTER TABLE vendors ADD COLUMN IF NOT EXISTS created_at TIMESTAMP WITH TIME ZONE;
+
+CREATE UNIQUE INDEX IF NOT EXISTS vendors_code_idx ON vendors (code);
+
 INSERT INTO vendors (code, name)
 VALUES ('system', 'System Tenant')
 ON CONFLICT (code) DO NOTHING;
@@ -14,8 +21,17 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS vendor_id UUID NULL REFERENCES vendor
 ALTER TABLE users ADD COLUMN IF NOT EXISTS temp_pin TEXT NULL;
 
 ALTER TABLE users DROP CONSTRAINT IF EXISTS users_role_check;
-ALTER TABLE users ADD CONSTRAINT users_role_check
-    CHECK (role IN ('admin', 'owner', 'manager', 'staff', 'report-viewer'));
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conname = 'users_role_check'
+          AND conrelid = 'users'::regclass
+    ) THEN
+        ALTER TABLE users ADD CONSTRAINT users_role_check
+            CHECK (role IN ('admin', 'owner', 'manager', 'staff', 'report-viewer'));
+    END IF;
+END $$;
 
 DO $$
 DECLARE
@@ -67,11 +83,22 @@ ALTER TABLE categories DROP CONSTRAINT IF EXISTS categories_name_key;
 ALTER TABLE stock DROP CONSTRAINT IF EXISTS stock_product_id_key;
 ALTER TABLE daily_orders DROP CONSTRAINT IF EXISTS unique_date_product_school;
 
-ALTER TABLE schools ADD CONSTRAINT unique_vendor_school_code UNIQUE (vendor_id, code);
-ALTER TABLE products ADD CONSTRAINT unique_vendor_product_code UNIQUE (vendor_id, code);
-ALTER TABLE categories ADD CONSTRAINT unique_vendor_category_name UNIQUE (vendor_id, name);
-ALTER TABLE stock ADD CONSTRAINT unique_vendor_stock_product UNIQUE (vendor_id, product_id);
-ALTER TABLE daily_orders ADD CONSTRAINT unique_vendor_date_product_school
-    UNIQUE (vendor_id, delivery_date, product_id, school_id);
-
-CREATE UNIQUE INDEX IF NOT EXISTS vendors_code_idx ON vendors (code);
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'unique_vendor_school_code') THEN
+        ALTER TABLE schools ADD CONSTRAINT unique_vendor_school_code UNIQUE (vendor_id, code);
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'unique_vendor_product_code') THEN
+        ALTER TABLE products ADD CONSTRAINT unique_vendor_product_code UNIQUE (vendor_id, code);
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'unique_vendor_category_name') THEN
+        ALTER TABLE categories ADD CONSTRAINT unique_vendor_category_name UNIQUE (vendor_id, name);
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'unique_vendor_stock_product') THEN
+        ALTER TABLE stock ADD CONSTRAINT unique_vendor_stock_product UNIQUE (vendor_id, product_id);
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'unique_vendor_date_product_school') THEN
+        ALTER TABLE daily_orders ADD CONSTRAINT unique_vendor_date_product_school
+            UNIQUE (vendor_id, delivery_date, product_id, school_id);
+    END IF;
+END $$;
