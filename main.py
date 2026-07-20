@@ -23,7 +23,13 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[
+        "http://localhost:8000",
+        "http://127.0.0.1:8000",
+        "http://localhost:8008",
+        "http://127.0.0.1:8008",
+        "https://kenlynsmart.github.io",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -220,6 +226,7 @@ class StockSchema(BaseModel):
 
 class OrderBatchSchema(BaseModel):
     id: Optional[UUID] = None
+    daily_order_id: UUID
     qty_change: float
     note: str = ""
 
@@ -310,6 +317,7 @@ def _attach_order_batches(orders: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     for batch in response.data or []:
         batches_by_order.setdefault(str(batch["daily_order_id"]), []).append({
             "id": batch["id"],
+            "daily_order_id": batch["daily_order_id"],
             "qty_change": batch["qty_change"],
             "note": batch.get("note") or "",
         })

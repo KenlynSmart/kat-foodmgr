@@ -62,6 +62,7 @@ createApp({
       price: 0,
       schoolQtys: {},
       schoolBatches: {},
+      schoolOrderIds: {},
       totalQty: 0,
       subTotal: 0,
       suggestions: [],
@@ -167,6 +168,7 @@ createApp({
     const catalogImportSummary = ref(null);
     const batchPopover = ref({ open: false, rowId: '', schoolId: '', position: {} });
     const batchForm = ref({ qtyChange: '', notePreset: 'Đợt bổ sung chiều', note: '' });
+    let lastFetchWarningAt = 0;
 
     const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
     const isStandalone = computed(() =>
@@ -295,14 +297,17 @@ createApp({
       if (row.searchQuery === undefined) row.searchQuery = row.shortcut || '';
       if (!row.schoolQtys) row.schoolQtys = {};
       if (!row.schoolBatches) row.schoolBatches = {};
+      if (!row.schoolOrderIds) row.schoolOrderIds = {};
       schools.value.forEach((school) => {
         const key = schoolKey(school);
         if (row.schoolQtys[key] === undefined) row.schoolQtys[key] = 0;
         if (!Array.isArray(row.schoolBatches[key])) row.schoolBatches[key] = [];
+        if (row.schoolOrderIds[key] === undefined) row.schoolOrderIds[key] = '';
       });
       Object.keys(row.schoolQtys).forEach((key) => {
         if (!schools.value.some((school) => schoolKey(school) === String(key))) delete row.schoolQtys[key];
         if (!schools.value.some((school) => schoolKey(school) === String(key))) delete row.schoolBatches[key];
+        if (!schools.value.some((school) => schoolKey(school) === String(key))) delete row.schoolOrderIds[key];
       });
     }
 
@@ -500,6 +505,11 @@ createApp({
       return round3((batches || []).reduce((sum, batch) => sum + num(batch.qty_change), 0));
     }
 
+    function ensureSchoolOrderId(row, schoolId) {
+      if (!row.schoolOrderIds[schoolId]) row.schoolOrderIds[schoolId] = uid();
+      return row.schoolOrderIds[schoolId];
+    }
+
     function ensureDefaultBatch(row, schoolId) {
       const batches = row.schoolBatches[schoolId];
       if (!batches.length && num(row.schoolQtys[schoolId])) {
@@ -547,8 +557,10 @@ createApp({
         }
         const schoolId = String(order.school_id);
         map[productId].schoolQtys[schoolId] = num(order.qty);
+        map[productId].schoolOrderIds[schoolId] = String(order.id || '');
         map[productId].schoolBatches[schoolId] = (order.batches || []).map((batch) => ({
           id: batch.id || uid(),
+          daily_order_id: batch.daily_order_id || order.id || null,
           qty_change: round3(batch.qty_change),
           note: batch.note || ''
         }));
@@ -772,15 +784,24 @@ createApp({
 
     async function apiJson(path, options = {}) {
       const token = authToken.value;
-      const response = await fetch(`${API_BASE}${path}`, {
-        headers: {
-          Accept: 'application/json',
-          'Content-Type': 'application/json',
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-          ...options.headers
-        },
-        ...options
-      });
+      let response;
+      try {
+        response = await fetch(`${API_BASE}${path}`, {
+          headers: {
+            Accept: 'application/json',
+            'Content-Type': 'application/json',
+            ...(token ? { Authorization: `Bearer ${token}` } : {}),
+            ...options.headers
+          },
+          ...options
+        });
+      } catch (error) {
+        if (error instanceof TypeError && error.message === 'Failed to fetch' && Date.now() - lastFetchWarningAt > 5000) {
+          lastFetchWarningAt = Date.now();
+          addToast('Hệ thống đang khởi động lại nguồn cấp dữ liệu đám mây (Render Free Tier), vui lòng đợi trong 30 giây và thử lại!', 'warn');
+        }
+        throw error;
+      }
       const text = await response.text();
       let data = null;
       try {
@@ -1161,7 +1182,10 @@ createApp({
         product_id: String(productKey(product)),
         school_id: String(schoolKey(school)),
         qty: round3(row.schoolQtys?.[schoolKey(school)]),
-        batches: row.schoolBatches?.[schoolKey(school)] || []
+        batches: (row.schoolBatches?.[schoolKey(school)] || []).map((batch) => ({
+          ...batch,
+          daily_order_id: ensureSchoolOrderId(row, schoolKey(school))
+        }))
       }));
     }
 

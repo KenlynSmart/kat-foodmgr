@@ -6,7 +6,24 @@ CREATE TABLE IF NOT EXISTS daily_order_batches (
     created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
 );
 
-CREATE INDEX IF NOT EXISTS daily_order_batches_order_id_idx
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_name = 'daily_order_batches'
+          AND column_name = 'order_id'
+    ) AND NOT EXISTS (
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_name = 'daily_order_batches'
+          AND column_name = 'daily_order_id'
+    ) THEN
+        ALTER TABLE daily_order_batches RENAME COLUMN order_id TO daily_order_id;
+    END IF;
+END $$;
+
+CREATE INDEX IF NOT EXISTS daily_order_batches_daily_order_id_idx
     ON daily_order_batches (daily_order_id, created_at);
 
 INSERT INTO daily_order_batches (daily_order_id, qty_change, note)
