@@ -534,6 +534,61 @@ async def upsert_daily_order(order_item: OrderUpsertSchema):
         )
 
 
+@app.post("/api/orders/bulk-upsert")
+async def bulk_upsert_daily_orders(orders_list: List[OrderUpsertSchema]):
+    if not orders_list:
+        return {
+            "status": "success",
+            "message": "Không có dữ liệu cần xử lý.",
+            "upserted_count": 0,
+            "deleted_count": 0,
+        }
+    try:
+        payload = jsonable_encoder(orders_list)
+        upsert_payload = []
+        delete_payload = []
+        for item in payload:
+            if not item.get("product_id") and item.get("product_code"):
+                item["product_id"] = _lookup_id_by_code("products", "code", item["product_code"])
+            if not item.get("school_id") and item.get("school_code"):
+                item["school_id"] = _lookup_id_by_code("schools", "code", item["school_code"])
+            item.pop("product_code", None)
+            item.pop("school_code", None)
+            if not item.get("product_id") or not item.get("school_id"):
+                raise HTTPException(status_code=400, detail="Thiếu product_id hoặc school_id cho daily_orders.")
+            (delete_payload if item["qty"] <= 0 else upsert_payload).append(item)
+
+        client = require_write_client()
+        upserted_count = 0
+        if upsert_payload:
+            response = client.table("daily_orders").upsert(
+                upsert_payload,
+                on_conflict="delivery_date,product_id,school_id",
+            ).execute()
+            upserted_count = len(response.data or [])
+
+        deleted_count = 0
+        for item in delete_payload:
+            client.table("daily_orders").delete() \
+                .eq("delivery_date", item["delivery_date"]) \
+                .eq("product_id", item["product_id"]) \
+                .eq("school_id", item["school_id"]) \
+                .execute()
+            deleted_count += 1
+        return {
+            "status": "success",
+            "upserted_count": upserted_count,
+            "deleted_count": deleted_count,
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Lỗi đồng bộ dữ liệu hàng loạt: {exc}",
+        )
+
+
 @app.delete("/api/orders")
 async def clear_daily_orders(date: date):
     try:

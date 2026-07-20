@@ -54,6 +54,7 @@ createApp({
 
     const emptyRow = () => ({
       id: uid(),
+      isDirty: false,
       shortcut: '',
       productName: '',
       unit: '',
@@ -207,7 +208,6 @@ createApp({
 
     function lockCell(row, field) {
       activeEditingCell.value = { rowId: row?.id || null, field };
-      markRowDirty(row);
     }
 
     function setActiveEditingCell(rowId, field) {
@@ -248,6 +248,7 @@ createApp({
     }
 
     function ensureRowSchools(row) {
+      if (row.isDirty === undefined) row.isDirty = false;
       if (!row.schoolQtys) row.schoolQtys = {};
       schools.value.forEach((school) => {
         const key = schoolKey(school);
@@ -683,6 +684,10 @@ createApp({
       return apiJson('/api/orders/upsert', { method: 'POST', body: JSON.stringify(payload) });
     }
 
+    async function bulkUpsertOrdersApi(payload) {
+      return apiJson('/api/orders/bulk-upsert', { method: 'POST', body: JSON.stringify(payload) });
+    }
+
     async function clearOrdersApi(date) {
       return apiJson(`/api/orders?date=${encodeURIComponent(date)}`, { method: 'DELETE' });
     }
@@ -824,7 +829,18 @@ createApp({
       }
     }
 
-    async function pushApiState() {
+    function rowToDeltaOrderRecords(row) {
+      const product = resolveProduct(row.productId || row.shortcut);
+      if (!product) return [];
+      return schools.value.map((school) => ({
+        delivery_date: deliveryDate.value,
+        product_id: String(productKey(product)),
+        school_id: String(schoolKey(school)),
+        qty: round3(row.schoolQtys?.[schoolKey(school)])
+      }));
+    }
+
+    async function pushApiState(dirtyOrderRows) {
       for (const school of schools.value) {
         const previousId = schoolKey(school);
         const response = await saveSchoolApi({
@@ -885,15 +901,10 @@ createApp({
         });
       });
       await Promise.all(stockTasks);
-      const orderRecords = rows.value.flatMap((row) => rowToOrderRecords(row));
-      await clearOrdersApi(deliveryDate.value);
-      for (const order of orderRecords) {
-        await upsertOrderApi({
-          ...order,
-          product_id: String(resolveProduct(order.product_id)?.id || order.product_id),
-          school_id: String(resolveSchool(order.school_id)?.id || order.school_id)
-        });
-      }
+      const orderRecords = dirtyOrderRows.flatMap((row) => rowToDeltaOrderRecords(row));
+      const response = await bulkUpsertOrdersApi(orderRecords);
+      dirtyOrderRows.forEach((row) => clearRowDirty(row));
+      return response;
     }
 
     async function syncNow() {
@@ -901,17 +912,20 @@ createApp({
       syncing = true;
       try {
         persistLocal();
+        const dirtyOrderRows = rows.value.filter((row) => row.isDirty || dirtyRows.has(row.id));
+        if (!dirtyOrderRows.length) {
+          addToast('Dữ liệu đã được tối ưu, không có gì cần đồng bộ thêm!', 'success');
+          return;
+        }
         if (!navigator.onLine) {
           setStatus('Offline', 'Local cache', 'Thiết bị offline; giữ dữ liệu local.');
           addToast('Đang offline, dùng dữ liệu local', 'warn');
           return;
         }
         setStatus('Đang đồng bộ', 'API', 'Đang đẩy local lên backend.');
-        await pushApiState();
-        await pullApiState();
-        rows.value.forEach((row) => clearRowDirty(row));
+        const response = await pushApiState(dirtyOrderRows);
         dirtyRows.clear();
-        addToast('Đã đồng bộ với backend', 'success');
+        addToast(`Đồng bộ thành công ${response?.upserted_count || 0} dòng thay đổi lên Cloud!`, 'success');
       } catch (error) {
         logError('syncNow', error);
         addToast('Đồng bộ thất bại', 'error');
