@@ -90,6 +90,8 @@ createApp({
     const schoolFilter = ref('');
     const stockFilter = ref('');
     const matrixPage = ref(1);
+    const activeFocusRow = ref(null);
+    const activeFocusCol = ref(null);
     const stockPage = ref(1);
     const catalogPage = ref(1);
     const pageSize = 25;
@@ -444,6 +446,48 @@ createApp({
         if (!schools.value.some((school) => schoolKey(school) === String(key))) delete row.schoolBatches[key];
         if (!schools.value.some((school) => schoolKey(school) === String(key))) delete row.schoolOrderIds[key];
       });
+    }
+
+    function handleCellFocus(rowIndex, colIndex, event) {
+      activeFocusRow.value = rowIndex;
+      activeFocusCol.value = colIndex;
+      if (event?.target && typeof event.target.select === 'function') {
+        window.setTimeout(() => event.target.select(), 10);
+      }
+    }
+
+    function handleCellBlur() {
+      activeFocusRow.value = null;
+      activeFocusCol.value = null;
+    }
+
+    function handleMatrixKeydown(event, rowIndex, colIndex) {
+      const totalRows = paginatedRows.value.length;
+      const totalCols = schools.value.length;
+      let targetRow = rowIndex;
+      let targetCol = colIndex;
+
+      switch (event.key) {
+        case 'ArrowUp':
+          targetRow = Math.max(0, rowIndex - 1);
+          break;
+        case 'ArrowDown':
+        case 'Enter':
+          targetRow = Math.min(Math.max(0, totalRows - 1), rowIndex + 1);
+          break;
+        case 'ArrowLeft':
+          targetCol = Math.max(0, colIndex - 1);
+          break;
+        case 'ArrowRight':
+          targetCol = Math.min(Math.max(0, totalCols - 1), colIndex + 1);
+          break;
+        default:
+          return;
+      }
+
+      event.preventDefault();
+      if (targetRow === rowIndex && targetCol === colIndex) return;
+      document.getElementById(`matrix-cell-${targetRow}-${targetCol}`)?.focus();
     }
 
     function ensureMasterDirtyFlags() {
@@ -2868,6 +2912,11 @@ createApp({
       schoolFilter,
       stockFilter,
       matrixPage,
+      activeFocusRow,
+      activeFocusCol,
+      handleCellFocus,
+      handleCellBlur,
+      handleMatrixKeydown,
       stockPage,
       catalogPage,
       matrixPageCount,

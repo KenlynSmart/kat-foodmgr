@@ -284,16 +284,16 @@
             </div>
             <div class="text-xs text-slate-500">Local-first · chỉ đồng bộ khi người dùng bấm nút</div>
           </div>
-          <div class="overflow-x-auto">
-            <table class="min-w-full text-sm">
+          <div class="relative max-h-[calc(100vh-230px)] overflow-auto rounded-xl border border-slate-200 bg-white">
+            <table class="min-w-[1500px] text-sm">
               <thead class="thead">
                 <tr>
-                  <th class="th w-12 text-center">#</th>
-                  <th class="th w-56">Shortcut</th>
-                  <th class="th min-w-[180px]">Sản phẩm</th>
-                  <th class="th w-20 text-center">ĐVT</th>
-                  <th class="th w-28 text-right">Giá</th>
-                  <th v-for="school in schools" :key="school.id" class="th text-center w-28 border-l">
+                  <th class="sticky left-0 top-0 z-30 w-12 border-b border-r border-slate-300 bg-slate-200 px-3 py-2 text-center font-bold text-slate-900">#</th>
+                  <th class="sticky left-12 top-0 z-30 w-56 border-b border-r border-slate-300 bg-slate-200 px-3 py-2 font-bold text-slate-900">Shortcut</th>
+                  <th class="sticky left-[14rem] top-0 z-30 min-w-[240px] border-b border-r border-slate-300 bg-slate-200 px-3 py-2 font-bold text-slate-900">Sản phẩm</th>
+                  <th class="sticky left-[29rem] top-0 z-30 w-20 border-b border-r border-slate-300 bg-slate-200 px-3 py-2 text-center font-bold text-slate-900">ĐVT</th>
+                  <th class="sticky left-[34rem] top-0 z-30 w-28 border-b border-r border-slate-300 bg-slate-200 px-3 py-2 text-right font-bold text-slate-900">Giá</th>
+                  <th v-for="(school, schoolIndex) in schools" :key="school.id" class="sticky top-0 z-20 w-28 border-b border-l border-slate-200 bg-slate-100 px-3 py-2 text-center font-bold text-slate-800" :class="schoolIndex === activeFocusCol ? 'bg-emerald-100' : ''">
                     <div class="flex flex-col items-center gap-1">
                       <span>{{ school.code || school.id }}</span>
                       <button @click="openSingleSchoolImportModal(school.id)" class="rounded-lg border border-emerald-200 bg-white px-2 py-1 text-[11px] text-emerald-700 hover:bg-emerald-50" :title="`Nhập đơn ${school.name}`">
@@ -307,12 +307,12 @@
                 </tr>
               </thead>
               <tbody class="divide-y divide-slate-100">
-                <tr v-for="(row, index) in paginatedRows" :key="row.id" class="align-top hover:bg-slate-50">
-                  <td class="px-3 py-3 text-center text-slate-400">
+                <tr v-for="(row, index) in paginatedRows" :key="row.id" class="align-top transition-colors duration-100 hover:bg-slate-50" :class="index === activeFocusRow ? 'bg-emerald-50/80' : ''">
+                  <td class="sticky left-0 z-10 w-12 border-r border-slate-200 bg-white px-3 py-3 text-center text-slate-400" :class="index === activeFocusRow ? 'bg-emerald-50/80' : ''">
                     <span v-if="row.isDirty" class="w-1.5 h-1.5 rounded-full bg-amber-500 inline-block animate-pulse mr-1"></span>
                     {{ (matrixPage - 1) * pageSize + index + 1 }}
                   </td>
-                  <td class="px-3 py-3 relative">
+                  <td class="sticky left-12 z-10 w-56 border-r border-slate-200 bg-white px-3 py-3 relative shadow-[2px_0_5px_-2px_rgba(0,0,0,0.08)]" :class="index === activeFocusRow ? 'bg-emerald-50/80' : ''">
                     <input v-model="row.searchQuery" @input="onShortcutInput(row)" @focus="lockCell(row, 'shortcut'); openSuggestions(row, $event)" @keydown="onShortcutKeydown($event, row)" @blur="unlockCell(row, 'shortcut'); closeSuggestions(row)" placeholder="tv, cl..." class="input uppercase font-semibold tracking-wide">
                     <teleport to="body">
                       <div v-if="row.showDropdown && row.suggestions.length" :style="suggestionStyle(row)" class="suggestions absolute z-50 left-0 mt-1 bg-white shadow-2xl border border-slate-200 rounded-xl overflow-y-auto max-h-60 w-[300px] xs:w-[380px] sm:w-[520px] md:w-[650px]">
@@ -328,23 +328,23 @@
                       </div>
                     </teleport>
                   </td>
-                  <td class="px-3 py-3">
+                  <td class="sticky left-[14rem] z-10 min-w-[240px] border-r border-slate-200 bg-white px-3 py-3 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.08)]" :class="index === activeFocusRow ? 'bg-emerald-50/80' : ''">
                     <div class="font-semibold text-slate-900">{{ row.productName || 'Chưa khớp mã' }}</div>
                     <div class="text-[11px] text-slate-400">{{ row.productName ? 'Đã map từ danh mục' : 'Chọn mã từ gợi ý' }}</div>
                   </td>
-                  <td class="px-3 py-3 text-center">{{ row.unit || '-' }}</td>
-                  <td class="px-3 py-3 text-right font-semibold">{{ row.price ? money(row.price) : '-' }}</td>
-                  <td v-for="school in schools" :key="school.id" class="px-2 py-2 border-l border-slate-100">
-                    <button @click="openBatchPopover(row, school, $event)" class="input flex w-full items-center justify-center gap-1 text-center">
+                  <td class="sticky left-[29rem] z-10 w-20 border-r border-slate-200 bg-white px-3 py-3 text-center" :class="index === activeFocusRow ? 'bg-emerald-50/80' : ''">{{ row.unit || '-' }}</td>
+                  <td class="sticky left-[34rem] z-10 w-28 border-r border-slate-200 bg-white px-3 py-3 text-right font-semibold shadow-[2px_0_5px_-2px_rgba(0,0,0,0.08)]" :class="index === activeFocusRow ? 'bg-emerald-50/80' : ''">{{ row.price ? money(row.price) : '-' }}</td>
+                  <td v-for="(school, schoolIndex) in schools" :key="school.id" class="border-b border-r border-slate-200 p-0 text-center transition-colors duration-100" :class="[(index === activeFocusRow || schoolIndex === activeFocusCol) ? 'bg-emerald-50/80' : '', (index === activeFocusRow && schoolIndex === activeFocusCol) ? 'bg-emerald-100/90' : '']">
+                    <button :id="`matrix-cell-${index}-${schoolIndex}`" @click="openBatchPopover(row, school, $event)" @focus="handleCellFocus(index, schoolIndex, $event)" @blur="handleCellBlur" @keydown="handleMatrixKeydown($event, index, schoolIndex)" class="input flex min-h-10 w-full items-center justify-center gap-1 rounded-none border-0 text-center transition-all duration-100" :class="index === activeFocusRow && schoolIndex === activeFocusCol ? 'ring-2 ring-emerald-500 font-bold text-emerald-950 bg-emerald-100 shadow-inner' : 'bg-transparent text-slate-700 hover:bg-slate-50/50'">
                       <span>{{ qty(row.schoolQtys[school.id]) }}</span>
                       <span v-if="row.schoolBatches?.[school.id]?.length > 1" class="rounded-full bg-emerald-100 px-1 text-[10px] font-bold text-emerald-700">
                         • {{ row.schoolBatches[school.id].length }}đ
                       </span>
                     </button>
                   </td>
-                  <td class="px-3 py-3 text-center font-bold text-emerald-700">{{ qty(row.totalQty) }}</td>
-                  <td class="px-3 py-3 text-right font-extrabold">{{ money(row.subTotal) }}</td>
-                  <td class="px-3 py-3 text-center">
+                  <td class="border-b border-slate-200 px-3 py-3 text-center font-bold text-emerald-700" :class="index === activeFocusRow ? 'bg-emerald-50/80' : ''">{{ qty(row.totalQty) }}</td>
+                  <td class="border-b border-slate-200 px-3 py-3 text-right font-extrabold" :class="index === activeFocusRow ? 'bg-emerald-50/80' : ''">{{ money(row.subTotal) }}</td>
+                  <td class="border-b border-slate-200 px-3 py-3 text-center" :class="index === activeFocusRow ? 'bg-emerald-50/80' : ''">
                     <button @click="removeRow(row.id)" class="text-rose-500 hover:text-rose-700"><i class="fa-regular fa-trash-can"></i></button>
                   </td>
                 </tr>
