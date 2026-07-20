@@ -158,7 +158,11 @@ PUBLIC_API_PATHS = {
 
 @app.middleware("http")
 async def protect_api_routes(request: Request, call_next):
-    if request.url.path.startswith("/api/") and request.url.path not in PUBLIC_API_PATHS:
+    if (
+        request.method != "OPTIONS"
+        and request.url.path.startswith("/api/")
+        and request.url.path not in PUBLIC_API_PATHS
+    ):
         try:
             require_bearer_user(request)
         except HTTPException as exc:
