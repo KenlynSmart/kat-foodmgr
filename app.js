@@ -97,13 +97,19 @@ createApp({
     const parserPreview = ref([]);
     const toasts = ref([]);
     const productFilter = ref('');
+    const productCategoryFilter = ref('');
     const schoolFilter = ref('');
     const stockFilter = ref('');
+    const matrixPage = ref(1);
+    const stockPage = ref(1);
+    const catalogPage = ref(1);
+    const pageSize = 25;
     const syncStatus = ref('Đang tải');
     const dataOrigin = ref('Local cache');
     const statusBanner = ref('');
     const lastSyncAt = ref('');
     const isSyncingManual = ref(false);
+    const isSubmittingCategory = ref(false);
     const debugLogs = ref([]);
     const printSchoolId = ref('all');
     const editingProduct = ref(false);
@@ -451,7 +457,11 @@ createApp({
 
     const filteredProducts = computed(() => {
       const q = norm(productFilter.value);
-      return (!q ? products.value : products.value.filter((item) => norm(item.code).includes(q) || norm(item.name).includes(q)))
+      return products.value.filter((item) => {
+          const matchesText = !q || norm(item.code).includes(q) || norm(item.name).includes(q);
+          const matchesCategory = !productCategoryFilter.value || String(item.category_id || '') === String(productCategoryFilter.value);
+          return matchesText && matchesCategory;
+        })
         .slice()
         .sort((a, b) => {
           const categoryA = categories.value.find((category) => category.id === a.category_id)?.name || '';
@@ -465,6 +475,25 @@ createApp({
       return !q ? categories.value : categories.value.filter((category) => norm(category.name).includes(q));
     });
 
+    const categoryProductCount = (categoryId) => products.value.filter((product) => String(product.category_id || '') === String(categoryId)).length;
+    const pageCount = (items) => Math.max(1, Math.ceil(items.length / pageSize));
+    const pageItems = (items, page) => items.slice((page - 1) * pageSize, page * pageSize);
+    const paginatedRows = computed(() => pageItems(rows.value, matrixPage.value));
+    const paginatedProducts = computed(() => pageItems(filteredProducts.value, catalogPage.value));
+    const paginatedStockProducts = computed(() => pageItems(filteredStockProducts.value, stockPage.value));
+    const matrixPageCount = computed(() => pageCount(rows.value));
+    const catalogPageCount = computed(() => pageCount(filteredProducts.value));
+    const stockPageCount = computed(() => pageCount(filteredStockProducts.value));
+    const paginationLabel = (items, page) => `Trang ${page} / ${pageCount(items)} · Tổng: ${items.length}`;
+    function previousPage(pageName) {
+      const pageRef = { matrix: matrixPage, stock: stockPage, catalog: catalogPage }[pageName];
+      pageRef.value = Math.max(1, pageRef.value - 1);
+    }
+    function nextPage(pageName, items) {
+      const pageRef = { matrix: matrixPage, stock: stockPage, catalog: catalogPage }[pageName];
+      pageRef.value = Math.min(pageCount(items), pageRef.value + 1);
+    }
+
     const categoryName = (categoryId) => categories.value.find((category) => String(category.id) === String(categoryId))?.name || 'Chưa phân nhóm';
 
     const filteredSchools = computed(() => {
@@ -476,6 +505,9 @@ createApp({
       const q = norm(stockFilter.value);
       return !q ? products.value : products.value.filter((item) => norm(item.code).includes(q) || norm(item.name).includes(q));
     });
+
+    watch([productFilter, productCategoryFilter], () => { catalogPage.value = 1; });
+    watch(stockFilter, () => { stockPage.value = 1; });
 
     const receipts = computed(() => {
       const buckets = groupOrdersBySchool();
@@ -590,6 +622,10 @@ createApp({
 
     async function saveProductApi(payload) {
       return apiJson('/api/products', { method: 'POST', body: JSON.stringify(payload) });
+    }
+
+    async function saveProductsBulkApi(payload) {
+      return apiJson('/api/products/bulk', { method: 'POST', body: JSON.stringify(payload) });
     }
 
     async function saveCategoryApi(payload) {
@@ -758,21 +794,27 @@ createApp({
     }
 
     async function pushApiState() {
-      const schoolTasks = schools.value.map((school) => saveSchoolApi({
-        code: school.code || school.id,
-        name: school.name,
-        bg_color: school.bg_color,
-        text_color: school.text_color,
-        border_color: school.border_color,
-        icon: school.icon
-      }));
-      const stockTasks = Object.entries(stockMap.value).map(([product_id, qtyValue]) => saveStockApi({
-        product_id,
-        qty: num(qtyValue)
-      }));
-      const orderTasks = rows.value.flatMap((row) => rowToOrderRecords(row).map((order) => upsertOrderApi(order)));
-
-      await Promise.all([...schoolTasks, ...stockTasks]);
+      for (const school of schools.value) {
+        const previousId = schoolKey(school);
+        const response = await saveSchoolApi({
+          code: school.code || school.id,
+          name: school.name,
+          bg_color: school.bg_color,
+          text_color: school.text_color,
+          border_color: school.border_color,
+          icon: school.icon
+        });
+        const saved = response?.data || response;
+        if (saved?.id && String(saved.id) !== previousId) {
+          rows.value.forEach((row) => {
+            if (Object.prototype.hasOwnProperty.call(row.schoolQtys || {}, previousId)) {
+              row.schoolQtys[saved.id] = row.schoolQtys[previousId];
+              delete row.schoolQtys[previousId];
+            }
+          });
+          school.id = saved.id;
+        }
+      }
       for (const category of categories.value.filter((item) => item.name?.trim())) {
         const response = await saveCategoryApi({ name: category.name.trim() });
         const saved = response?.data || response;
@@ -783,16 +825,44 @@ createApp({
           category.id = saved.id;
         }
       }
-      const productTasks = products.value.map((product) => saveProductApi({
+      for (const product of products.value) {
+        const previousId = productKey(product);
+        const response = await saveProductApi({
         code: product.code,
         name: product.name,
         unit: product.unit,
         price: num(product.price),
         category_id: product.category_id || null
-      }));
-      await Promise.all(productTasks);
+        });
+        const saved = response?.data || response;
+        if (saved?.id && String(saved.id) !== previousId) {
+          if (Object.prototype.hasOwnProperty.call(stockMap.value, previousId)) {
+            stockMap.value[saved.id] = stockMap.value[previousId];
+            delete stockMap.value[previousId];
+          }
+          rows.value.forEach((row) => {
+            if (String(row.productId || '') === previousId) row.productId = saved.id;
+          });
+          product.id = saved.id;
+        }
+      }
+      const stockTasks = Object.entries(stockMap.value).map(([product_id, qtyValue]) => {
+        const product = resolveProduct(product_id);
+        return saveStockApi({
+          product_id: product?.id || product_id,
+          qty: num(qtyValue)
+        });
+      });
+      await Promise.all(stockTasks);
+      const orderRecords = rows.value.flatMap((row) => rowToOrderRecords(row));
       await clearOrdersApi(deliveryDate.value);
-      await Promise.all(orderTasks);
+      for (const order of orderRecords) {
+        await upsertOrderApi({
+          ...order,
+          product_id: String(resolveProduct(order.product_id)?.id || order.product_id),
+          school_id: String(resolveSchool(order.school_id)?.id || order.school_id)
+        });
+      }
     }
 
     async function syncNow() {
@@ -871,6 +941,8 @@ createApp({
     async function saveCategory() {
       const name = categoryForm.value.name.trim();
       if (!name) return;
+      if (isSubmittingCategory.value) return;
+      isSubmittingCategory.value = true;
       try {
         const response = await saveCategoryApi({ name });
         const category = response?.data || response;
@@ -882,6 +954,8 @@ createApp({
       } catch (error) {
         logError('saveCategory', error);
         addToast(`Không thể lưu nhóm hàng: ${error.message}`, 'error');
+      } finally {
+        isSubmittingCategory.value = false;
       }
     }
 
@@ -1368,38 +1442,41 @@ createApp({
           categoryIds.set(category.name, record.id);
         }
         const seenCodes = new Set(products.value.map((product) => norm(product.code)));
-        let registered = 0;
-        for (const item of catalogReviewItems.value) {
+        const bulkPayload = catalogReviewItems.value.map((item) => {
           const code = norm(item.code);
           if (!code || !/^[a-z][a-z0-9_-]*$/i.test(code)) throw new Error(`Mã hàng không hợp lệ: ${item.originalCode || '(trống)'}`);
           if (seenCodes.has(code) && !item.existingProductId) throw new Error(`Mã hàng bị trùng: ${code}`);
           const categoryId = categoryIds.get(item.categoryName) || null;
-          const response = await saveProductApi({
+          return {
             code,
             name: item.name.trim(),
             unit: item.unit.trim() || '-',
             price: num(item.price),
             category_id: categoryId
-          });
-          const saved = response?.data || response;
+          };
+        });
+        const existingCodes = new Set(products.value.map((product) => norm(product.code)));
+        const response = await saveProductsBulkApi(bulkPayload);
+        const savedProducts = Array.isArray(response?.data) ? response.data : [];
+        const savedByCode = new Map(savedProducts.map((product) => [norm(product.code), product]));
+        let registered = 0;
+        catalogReviewItems.value.forEach((item, index) => {
+          const payload = bulkPayload[index];
+          const saved = savedByCode.get(payload.code) || {};
           const product = {
             ...saved,
-            id: saved?.id || item.existingProductId || crypto.randomUUID(),
-            code,
-            name: item.name.trim(),
-            unit: item.unit.trim() || '-',
-            price: num(item.price),
-            category_id: categoryId,
+            id: saved.id || item.existingProductId || crypto.randomUUID(),
+            ...payload,
             is_market_price: item.isMarketPrice
           };
-          const index = products.value.findIndex((existing) => norm(existing.code) === code);
-          if (index >= 0) products.value[index] = { ...products.value[index], ...product };
+          const productIndex = products.value.findIndex((existing) => norm(existing.code) === payload.code);
+          if (productIndex >= 0) products.value[productIndex] = { ...products.value[productIndex], ...product };
           else {
             products.value.unshift(product);
-            registered += 1;
+            if (!existingCodes.has(payload.code)) registered += 1;
           }
-          seenCodes.add(code);
-        }
+          seenCodes.add(payload.code);
+        });
         catalogImportSummary.value = {
           ...catalogImportSummary.value,
           totalCategories: categories.value.length,
@@ -1769,8 +1846,22 @@ createApp({
       parserPreview,
       toasts,
       productFilter,
+      productCategoryFilter,
       schoolFilter,
       stockFilter,
+      matrixPage,
+      stockPage,
+      catalogPage,
+      matrixPageCount,
+      stockPageCount,
+      catalogPageCount,
+      paginatedRows,
+      paginatedProducts,
+      paginatedStockProducts,
+      paginationLabel,
+      previousPage,
+      nextPage,
+      pageSize,
       syncStatus,
       dataOrigin,
       lastSyncLabel,
@@ -1779,8 +1870,10 @@ createApp({
       printSchoolId,
       productForm,
       categoryForm,
+      isSubmittingCategory,
       categoryFilter,
       filteredCategories,
+      categoryProductCount,
       categoryName,
       editingCategoryId,
       categoryDraftName,
