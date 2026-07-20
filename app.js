@@ -104,6 +104,7 @@ createApp({
     const currentUser = ref(null);
     const currentVendorName = computed(() => currentUser.value?.vendor_name || 'Hệ thống Quản trị');
     const users = ref([]);
+    const pendingPinUsers = computed(() => users.value.filter((user) => user.temp_pin));
     const vendors = ref([]);
     const selectedVendorId = ref('');
     const vendorForm = ref({ code: '', name: '', status: 'active' });
@@ -345,6 +346,17 @@ createApp({
 
     function dismissNotification(notificationId) {
       notifications.value = notifications.value.filter((notification) => notification.id !== notificationId);
+    }
+
+    async function copyTempPin(user) {
+      if (!user?.temp_pin) return;
+      try {
+        await navigator.clipboard.writeText(user.temp_pin);
+        addToast(`Đã sao chép mã PIN tạm của ${user.username} vào bộ nhớ tạm!`, 'success');
+      } catch (error) {
+        logError('copyTempPin', error);
+        addToast('Không thể sao chép mã PIN vào bộ nhớ tạm.', 'error');
+      }
     }
 
     function handleAuthCallback() {
@@ -1276,13 +1288,18 @@ createApp({
       }
       userCPSaving.value = true;
       try {
-        await apiJson('/api/auth/change-password', {
+        const response = await apiJson('/api/auth/change-password', {
           method: 'POST',
           body: JSON.stringify({
             old_password: passwordForm.value.oldPassword,
             new_password: passwordForm.value.newPassword
           })
         });
+        if (response.access_token) {
+          authToken.value = response.access_token;
+          localStorage.setItem('auth_token', response.access_token);
+        }
+        if (response.user) currentUser.value = response.user;
         passwordForm.value = { oldPassword: '', newPassword: '', confirmPassword: '' };
         mustChangePassword.value = false;
         addToast('Đã đổi mật khẩu thành công.', 'success');
@@ -1307,13 +1324,18 @@ createApp({
       }
       userCPSaving.value = true;
       try {
-        await apiJson('/api/auth/change-password', {
+        const response = await apiJson('/api/auth/change-password', {
           method: 'POST',
           body: JSON.stringify({
             old_password: form.oldPassword,
             new_password: form.newPassword
           })
         });
+        if (response.access_token) {
+          authToken.value = response.access_token;
+          localStorage.setItem('auth_token', response.access_token);
+        }
+        if (response.user) currentUser.value = response.user;
         onboardingPasswordForm.value = { oldPassword: '', newPassword: '', confirmPassword: '' };
         mustChangePassword.value = false;
         showPasswordOnboarding.value = false;
@@ -2819,6 +2841,8 @@ createApp({
       currentUser,
       currentVendorName,
       users,
+      pendingPinUsers,
+      copyTempPin,
       vendors,
       selectedVendorId,
       vendorForm,

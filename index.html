@@ -62,11 +62,15 @@
             <div class="w-11 h-11 rounded-2xl bg-white text-emerald-700 grid place-items-center shadow-inner">
               <i class="fa-solid fa-bowl-food text-xl"></i>
             </div>
-            <div class="flex flex-col">
+            <div class="flex flex-col min-w-[240px]">
               <span class="text-xl font-bold tracking-tight text-white">VNFS-Portal</span>
               <span class="text-xs font-extrabold uppercase tracking-wider text-emerald-200 bg-emerald-900/40 px-2 py-0.5 rounded-md w-fit mt-0.5 shadow-sm">
                 {{ currentVendorName }}
               </span>
+              <p v-if="currentUser && currentUser.username !== 'admin' && currentUser.role !== 'admin'" class="text-[10px] text-emerald-300/90 font-medium tracking-wide mt-1 whitespace-nowrap">
+                Gói: <span class="font-bold text-white">{{ currentUser.subscription_status || 'active' }}</span>
+                | Hạn dùng: <span class="font-mono font-bold text-amber-300">{{ currentUser.subscription_due_date || '—' }}</span>
+              </p>
             </div>
           </div>
           <div class="flex flex-wrap items-center gap-2 text-xs">
@@ -646,7 +650,7 @@
         </div>
         </div>
 
-        <div class="panel space-y-4 border-2 border-slate-200">
+        <div v-if="currentUser && currentUser.username !== 'admin' && currentUser.role !== 'admin'" class="panel space-y-4 border-2 border-slate-200">
           <div class="flex items-center justify-between gap-3 flex-wrap">
             <div>
               <h2 class="section-title">Cấu Hình Hệ Thống</h2>
@@ -796,6 +800,34 @@
                 </tr>
               </tbody>
             </table>
+          </div>
+          <div v-if="isAdmin" class="space-y-3 rounded-2xl border border-amber-200 bg-amber-50/60 p-4">
+            <div class="flex items-center justify-between gap-3">
+              <div>
+                <h3 class="font-bold text-amber-950">Danh Sách Tài Khoản Chờ Kích Hoạt (PIN Tạm Thời)</h3>
+                <p class="text-xs text-amber-800">Các tài khoản chưa hoàn tất bước thiết lập mật khẩu.</p>
+              </div>
+              <span class="badge">{{ pendingPinUsers.length }} tài khoản</span>
+            </div>
+            <div class="overflow-x-auto">
+              <table class="min-w-full text-sm">
+                <thead class="thead">
+                  <tr><th class="th">Tên đăng nhập</th><th class="th">Tên hiển thị</th><th class="th">Nhà cung cấp</th><th class="th">Mã PIN tạm thời</th><th class="th"></th></tr>
+                </thead>
+                <tbody class="divide-y divide-amber-100">
+                  <tr v-for="user in pendingPinUsers" :key="`pending-pin-${user.id}`">
+                    <td class="px-3 py-2 font-semibold">{{ user.username }}</td>
+                    <td class="px-3 py-2">{{ user.nickname || '—' }}</td>
+                    <td class="px-3 py-2">{{ user.vendor_name || 'System' }}</td>
+                    <td class="px-3 py-2"><code class="rounded border border-slate-200 bg-slate-100 px-2 py-0.5 font-mono text-slate-700">{{ user.temp_pin }}</code></td>
+                    <td class="px-3 py-2 text-right">
+                      <button @click="copyTempPin(user)" class="btn-secondary whitespace-nowrap"><i class="far fa-copy mr-1"></i>Sao chép PIN</button>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+              <p v-if="!pendingPinUsers.length" class="py-5 text-center text-sm italic text-slate-500">Không có tài khoản chờ kích hoạt.</p>
+            </div>
           </div>
         </div>
       </section>

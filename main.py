@@ -239,6 +239,7 @@ class AuthUser(BaseModel):
     provider: str
     role: str
     status: str
+    temp_pin: Optional[str] = None
     vendor_id: Optional[UUID] = None
     vendor_name: Optional[str] = None
     subscription_due_date: Optional[date] = None
@@ -297,6 +298,7 @@ def _auth_user_from_row(row: Dict[str, Any]) -> AuthUser:
         provider=str(row["provider"]),
         role=str(row["role"]),
         status=str(row["status"]),
+        temp_pin=row.get("temp_pin"),
         vendor_id=UUID(str(row["vendor_id"])) if row.get("vendor_id") else None,
         vendor_name=row.get("vendor_name"),
         subscription_due_date=row.get("subscription_due_date"),
@@ -775,8 +777,11 @@ async def list_users(
     user: Dict[str, Any] = Depends(require_management_user),
 ):
     try:
+        select_fields = "id,username,nickname,email,provider,role,status,vendor_id"
+        if _is_system_admin(user):
+            select_fields = "id,username,nickname,email,provider,role,status,temp_pin,vendor_id"
         query = require_read_client().table("users").select(
-            "id,username,nickname,email,provider,role,status,vendor_id"
+            select_fields
         )
         if _is_system_admin(user):
             if vendor_id:
@@ -784,7 +789,17 @@ async def list_users(
         else:
             query = _scope_query(query, user)
         response = query.order("created_at").execute()
-        return [_auth_user_from_row(row) for row in response.data or []]
+        rows = response.data or []
+        vendor_rows = (
+            require_read_client()
+            .table("vendors")
+            .select("id,name")
+            .execute()
+        ).data or []
+        vendor_names = {str(row["id"]): row["name"] for row in vendor_rows}
+        for row in rows:
+            row["vendor_name"] = vendor_names.get(str(row["vendor_id"])) if row.get("vendor_id") else None
+        return [_auth_user_from_row(row) for row in rows]
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Không thể tải danh sách tài khoản: {exc}") from exc
 
@@ -1117,7 +1132,7 @@ async def change_password(
         client = require_write_client()
         response = (
             client.table("users")
-            .select("id,password,temp_pin,status")
+            .select("id,username,nickname,email,provider,role,status,password,temp_pin,vendor_id")
             .eq("id", user["sub"])
             .limit(1)
             .execute()
@@ -1140,7 +1155,18 @@ async def change_password(
         )
         if not updated.data:
             raise HTTPException(status_code=404, detail="Không thể cập nhật mật khẩu.")
-        return {"status": "success", "message": "Đã cập nhật mật khẩu."}
+        refreshed_user = updated.data[0]
+        refreshed_user["must_change_password"] = False
+        refreshed_user["vendor_name"] = _vendor_name_for_id(refreshed_user.get("vendor_id"))
+        refreshed_user.update(_subscription_fields(refreshed_user.get("vendor_id")))
+        return {
+            "status": "success",
+            "message": "Đã cập nhật mật khẩu.",
+            "access_token": _create_app_token(refreshed_user),
+            "token_type": "bearer",
+            "user": _auth_user_from_row(refreshed_user).model_dump(),
+            "must_change_password": False,
+        }
     except HTTPException:
         raise
     except Exception as exc:
