@@ -1,6 +1,7 @@
 import asyncio
 import os
 import secrets
+from contextvars import ContextVar
 from pathlib import Path
 from datetime import date, datetime
 from typing import Any, Dict, List, Optional
@@ -54,6 +55,8 @@ GOOGLE_OAUTH_REDIRECT_URI = os.environ.get(
 FRONTEND_URL = os.environ.get("FRONTEND_URL", "/")
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 BULK_CHUNK_SIZE = 100
+AUTH_CONTEXT: ContextVar[Optional[Dict[str, Any]]] = ContextVar("auth_context", default=None)
+ROLE_RANK = {"report-viewer": 1, "staff": 2, "manager": 3, "owner": 4, "admin": 5}
 
 try:
     supabase_read: Optional[Client] = (
@@ -94,6 +97,39 @@ def require_read_client() -> Client:
     return supabase_read
 
 
+def _auth_context() -> Dict[str, Any]:
+    user = AUTH_CONTEXT.get()
+    if not user:
+        return {}
+    return user
+
+
+def _is_system_admin(user: Optional[Dict[str, Any]] = None) -> bool:
+    return (user or _auth_context()).get("role") == "admin"
+
+
+def _vendor_id(user: Optional[Dict[str, Any]] = None) -> Optional[str]:
+    context = user or _auth_context()
+    if _is_system_admin(context):
+        return None
+    vendor_id = context.get("vendor_id")
+    if not vendor_id:
+        raise HTTPException(status_code=403, detail="Tài khoản chưa được gán vendor.")
+    return str(vendor_id)
+
+
+def _scope_query(query: Any, user: Optional[Dict[str, Any]] = None) -> Any:
+    vendor_id = _vendor_id(user)
+    return query if vendor_id is None else query.eq("vendor_id", vendor_id)
+
+
+def _scope_payload(payload: Dict[str, Any], user: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    vendor_id = _vendor_id(user)
+    if vendor_id is not None:
+        payload["vendor_id"] = vendor_id
+    return payload
+
+
 def _chunks(items: List[Dict[str, Any]]) -> List[List[Dict[str, Any]]]:
     return [
         items[index:index + BULK_CHUNK_SIZE]
@@ -107,6 +143,7 @@ def _run_upsert_chunk(
     payload: List[Dict[str, Any]],
     conflict_column: str,
 ) -> List[Dict[str, Any]]:
+    payload = [_scope_payload(dict(item)) for item in payload]
     response = client.table(table).upsert(payload, on_conflict=conflict_column).execute()
     return response.data or []
 
@@ -125,6 +162,13 @@ class ChangePasswordSchema(BaseModel):
     new_password: str = Field(..., min_length=8)
 
 
+class CreateVendorUserSchema(BaseModel):
+    username: str = Field(..., min_length=3, max_length=100)
+    nickname: Optional[str] = Field(default=None, max_length=100)
+    role: str = Field(default="staff")
+    vendor_id: Optional[UUID] = None
+
+
 class AuthUser(BaseModel):
     id: UUID
     username: str
@@ -133,6 +177,8 @@ class AuthUser(BaseModel):
     provider: str
     role: str
     status: str
+    vendor_id: Optional[UUID] = None
+    must_change_password: bool = False
 
 
 class AuthResponse(BaseModel):
@@ -142,6 +188,7 @@ class AuthResponse(BaseModel):
     role: str
     username: str
     user: AuthUser
+    must_change_password: bool = False
 
 
 def _create_app_token(user: Dict[str, Any]) -> str:
@@ -150,6 +197,8 @@ def _create_app_token(user: Dict[str, Any]) -> str:
         "sub": str(user["id"]),
         "username": user["username"],
         "role": user["role"],
+        "vendor_id": str(user["vendor_id"]) if user.get("vendor_id") else None,
+        "must_change_password": bool(user.get("must_change_password", False)),
         "iat": now,
         "exp": now.timestamp() + AUTH_JWT_EXPIRE_MINUTES * 60,
     }
@@ -165,6 +214,8 @@ def _auth_user_from_row(row: Dict[str, Any]) -> AuthUser:
         provider=str(row["provider"]),
         role=str(row["role"]),
         status=str(row["status"]),
+        vendor_id=UUID(str(row["vendor_id"])) if row.get("vendor_id") else None,
+        must_change_password=bool(row.get("must_change_password", False)),
     )
 
 
@@ -185,6 +236,12 @@ def require_admin_user(user: Dict[str, Any] = Depends(require_bearer_user)) -> D
     return user
 
 
+def require_management_user(user: Dict[str, Any] = Depends(require_bearer_user)) -> Dict[str, Any]:
+    if ROLE_RANK.get(user.get("role", ""), 0) < ROLE_RANK["manager"]:
+        raise HTTPException(status_code=403, detail="Chỉ owner, manager hoặc admin mới có quyền quản lý tài khoản.")
+    return user
+
+
 PUBLIC_API_PATHS = {
     "/api/auth/login",
     "/api/auth/google/url",
@@ -194,16 +251,29 @@ PUBLIC_API_PATHS = {
 
 @app.middleware("http")
 async def protect_api_routes(request: Request, call_next):
-    if (
-        request.method != "OPTIONS"
-        and request.url.path.startswith("/api/")
-        and request.url.path not in PUBLIC_API_PATHS
-    ):
+    if request.method == "OPTIONS" or not request.url.path.startswith("/api/") or request.url.path in PUBLIC_API_PATHS:
+        return await call_next(request)
+
+    try:
+        user = require_bearer_user(request)
+        token = AUTH_CONTEXT.set(user)
         try:
-            require_bearer_user(request)
-        except HTTPException as exc:
-            return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
-    return await call_next(request)
+            role = user.get("role", "staff")
+            mutation = request.method in {"POST", "PUT", "PATCH", "DELETE"}
+            catalog_mutation = any(
+                request.url.path.startswith(path)
+                for path in ("/api/products", "/api/categories", "/api/schools", "/api/auth/users")
+            )
+            personal_auth_mutation = request.url.path in {"/api/auth/profile", "/api/auth/change-password"}
+            if mutation and role == "report-viewer" and not personal_auth_mutation:
+                return JSONResponse(status_code=403, content={"detail": "Tài khoản chỉ có quyền xem báo cáo."})
+            if mutation and catalog_mutation and role not in {"admin", "owner", "manager"}:
+                return JSONResponse(status_code=403, content={"detail": "Vai trò hiện tại không được sửa danh mục."})
+            return await call_next(request)
+        finally:
+            AUTH_CONTEXT.reset(token)
+    except HTTPException as exc:
+        return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
 
 
 class SchoolSchema(BaseModel):
@@ -324,14 +394,9 @@ def _attach_order_batches(orders: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     if not orders:
         return orders
     order_ids = [str(order["id"]) for order in orders]
-    response = (
-        require_read_client()
-        .table("daily_order_batches")
-        .select(_order_batch_select())
-        .in_("daily_order_id", order_ids)
-        .order("created_at")
-        .execute()
-    )
+    response = _scope_query(
+        require_read_client().table("daily_order_batches").select(_order_batch_select())
+    ).in_("daily_order_id", order_ids).order("created_at").execute()
     batches_by_order: Dict[str, List[Dict[str, Any]]] = {}
     for batch in response.data or []:
         batches_by_order.setdefault(str(batch["daily_order_id"]), []).append({
@@ -349,7 +414,7 @@ def _school_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
     data = dict(payload)
     code = data.pop("code", data.pop("id", ""))
     data["code"] = _code(str(code))
-    return data
+    return _scope_payload(data)
 
 
 def _is_uuid(value: str) -> bool:
@@ -362,9 +427,7 @@ def _is_uuid(value: str) -> bool:
 
 def _lookup_id_by_code(table: str, code_field: str, code: str) -> Optional[str]:
     response = (
-        require_read_client()
-        .table(table)
-        .select("id")
+        _scope_query(require_read_client().table(table).select("id"))
         .eq(code_field, _code(code))
         .limit(1)
         .execute()
@@ -392,13 +455,17 @@ def _normalise_order_payload(item: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _sync_order_batches(client: Client, daily_order_id: str, batches: List[Dict[str, Any]]) -> None:
-    client.table("daily_order_batches").delete().eq("daily_order_id", daily_order_id).execute()
+    _scope_query(client.table("daily_order_batches").delete()).eq(
+        "daily_order_id", daily_order_id
+    ).execute()
+    vendor_id = _vendor_id()
     payload = [
         {
             **({"id": batch["id"]} if batch.get("id") else {}),
             "daily_order_id": daily_order_id,
             "qty_change": batch["qty_change"],
             "note": str(batch.get("note") or "").strip(),
+            **({"vendor_id": vendor_id} if vendor_id else {}),
         }
         for batch in batches
         if batch["qty_change"] != 0
@@ -420,8 +487,11 @@ def _process_order_chunk(
     upserted_count = 0
     if upsert_payload:
         response = client.table("daily_orders").upsert(
-            [{key: value for key, value in item.items() if key != "batches"} for item in upsert_payload],
-            on_conflict="delivery_date,product_id,school_id",
+            [
+                _scope_payload({key: value for key, value in item.items() if key != "batches"})
+                for item in upsert_payload
+            ],
+            on_conflict="vendor_id,delivery_date,product_id,school_id",
         ).execute()
         parents = response.data or []
         upserted_count = len(parents)
@@ -439,7 +509,7 @@ def _process_order_chunk(
 
     deleted_count = 0
     for item in delete_payload:
-        client.table("daily_orders").delete() \
+        _scope_query(client.table("daily_orders").delete()) \
             .eq("delivery_date", item["delivery_date"]) \
             .eq("product_id", item["product_id"]) \
             .eq("school_id", item["school_id"]) \
@@ -455,26 +525,30 @@ async def login(credentials: LoginSchema):
         response = (
             require_read_client()
             .table("users")
-            .select("id,username,nickname,password,email,provider,role,status")
+            .select("id,username,nickname,password,temp_pin,vendor_id,email,provider,role,status")
             .eq("username", credentials.username.strip())
             .eq("provider", "local")
             .limit(1)
             .execute()
         )
         user = response.data[0] if response.data else None
-        if (
-            not user
-            or not user.get("password")
-            or not pwd_context.verify(credentials.password, user["password"])
-        ):
+        password_matches = bool(
+            user
+            and user.get("password")
+            and pwd_context.verify(credentials.password, user["password"])
+        )
+        pin_matches = bool(user and user.get("temp_pin") and credentials.password == user["temp_pin"])
+        if not password_matches and not pin_matches:
             raise HTTPException(status_code=401, detail="Tên đăng nhập hoặc mật khẩu không đúng.")
         if user["status"] != "active":
             raise HTTPException(status_code=403, detail="Tài khoản đã bị khóa.")
+        user["must_change_password"] = pin_matches
         return AuthResponse(
             access_token=_create_app_token(user),
             role=user["role"],
             username=user["username"],
             user=_auth_user_from_row(user),
+            must_change_password=pin_matches,
         )
     except HTTPException:
         raise
@@ -563,14 +637,16 @@ async def current_user(user: Dict[str, Any] = Depends(require_bearer_user)):
         response = (
             require_read_client()
             .table("users")
-            .select("id,username,nickname,email,provider,role,status")
+            .select("id,username,nickname,email,provider,role,status,vendor_id")
             .eq("id", user["sub"])
             .limit(1)
             .execute()
         )
         if not response.data:
             raise HTTPException(status_code=401, detail="Tài khoản không còn tồn tại.")
-        return _auth_user_from_row(response.data[0])
+        record = response.data[0]
+        record["must_change_password"] = bool(user.get("must_change_password", False))
+        return _auth_user_from_row(record)
     except HTTPException:
         raise
     except Exception as exc:
@@ -578,18 +654,52 @@ async def current_user(user: Dict[str, Any] = Depends(require_bearer_user)):
 
 
 @app.get("/api/auth/users", response_model=List[AuthUser])
-async def list_users(_: Dict[str, Any] = Depends(require_admin_user)):
+async def list_users(user: Dict[str, Any] = Depends(require_management_user)):
     try:
-        response = (
-            require_read_client()
-            .table("users")
-            .select("id,username,nickname,email,provider,role,status")
-            .order("created_at")
-            .execute()
+        query = require_read_client().table("users").select(
+            "id,username,nickname,email,provider,role,status,vendor_id"
         )
+        response = _scope_query(query, user).order("created_at").execute()
         return [_auth_user_from_row(row) for row in response.data or []]
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Không thể tải danh sách tài khoản: {exc}") from exc
+
+
+@app.post("/api/auth/users", response_model=Dict[str, Any])
+async def create_vendor_user(
+    payload: CreateVendorUserSchema,
+    user: Dict[str, Any] = Depends(require_management_user),
+):
+    if payload.role not in {"report-viewer", "staff", "manager"}:
+        raise HTTPException(status_code=422, detail="Vai trò onboarding không hợp lệ.")
+    vendor_id = str(payload.vendor_id) if payload.vendor_id and _is_system_admin(user) else _vendor_id(user)
+    if not vendor_id:
+        raise HTTPException(status_code=422, detail="Phải chỉ định vendor cho tài khoản mới.")
+    temp_pin = "".join(secrets.choice("0123456789") for _ in range(4))
+    record = {
+        "username": payload.username.strip(),
+        "nickname": payload.nickname.strip() if payload.nickname else None,
+        "password": None,
+        "temp_pin": temp_pin,
+        "vendor_id": vendor_id,
+        "provider": "local",
+        "role": payload.role,
+        "status": "active",
+    }
+    try:
+        response = require_write_client().table("users").insert(record).execute()
+        if not response.data:
+            raise HTTPException(status_code=400, detail="Không thể tạo tài khoản vendor.")
+        created = response.data[0]
+        return {
+            "status": "success",
+            "temporary_pin": temp_pin,
+            "user": _auth_user_from_row(created).model_dump(),
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Không thể tạo tài khoản vendor: {exc}") from exc
 
 
 @app.put("/api/auth/profile", response_model=AuthUser)
@@ -624,7 +734,7 @@ async def change_password(
         client = require_write_client()
         response = (
             client.table("users")
-            .select("id,password,status")
+            .select("id,password,temp_pin,status")
             .eq("id", user["sub"])
             .limit(1)
             .execute()
@@ -632,11 +742,16 @@ async def change_password(
         record = response.data[0] if response.data else None
         if not record or record["status"] != "active":
             raise HTTPException(status_code=401, detail="Tài khoản không còn hoạt động.")
-        if not record.get("password") or not pwd_context.verify(payload.old_password, record["password"]):
+        password_matches = bool(
+            record.get("password")
+            and pwd_context.verify(payload.old_password, record["password"])
+        )
+        pin_matches = bool(record.get("temp_pin") and payload.old_password == record["temp_pin"])
+        if not password_matches and not pin_matches:
             raise HTTPException(status_code=401, detail="Mật khẩu hiện tại không đúng.")
         updated = (
             client.table("users")
-            .update({"password": pwd_context.hash(payload.new_password)})
+            .update({"password": pwd_context.hash(payload.new_password), "temp_pin": None})
             .eq("id", user["sub"])
             .execute()
         )
@@ -702,7 +817,9 @@ async def serve_service_worker():
 @app.get("/api/schools", response_model=List[SchoolRecord])
 async def get_schools():
     try:
-        response = require_read_client().table("schools").select(_school_select()).order("created_at").execute()
+        response = _scope_query(
+            require_read_client().table("schools").select(_school_select())
+        ).order("created_at").execute()
         return response.data
     except Exception as exc:
         raise HTTPException(
@@ -715,12 +832,9 @@ async def get_schools():
 async def create_school(school: SchoolSchema):
     try:
         data = _school_payload(school.model_dump())
-        response = (
-            require_write_client()
-            .table("schools")
-            .upsert(data, on_conflict="code")
-            .execute()
-        )
+        response = require_write_client().table("schools").upsert(
+            _scope_payload(data), on_conflict="vendor_id,code"
+        ).execute()
         if not response.data:
             raise HTTPException(
                 status_code=400, detail="Thao tác lưu điểm trường thất bại."
@@ -738,7 +852,7 @@ async def create_school(school: SchoolSchema):
 @app.delete("/api/schools/{school_id}")
 async def delete_school(school_id: str):
     try:
-        query = require_write_client().table("schools").delete()
+        query = _scope_query(require_write_client().table("schools").delete())
         if _is_uuid(school_id):
             query.eq("id", school_id)
         else:
@@ -755,7 +869,9 @@ async def delete_school(school_id: str):
 @app.get("/api/products", response_model=List[ProductRecord])
 async def get_products():
     try:
-        response = require_read_client().table("products").select(_product_select()).order("code").execute()
+        response = _scope_query(
+            require_read_client().table("products").select(_product_select())
+        ).order("code").execute()
         return response.data
     except Exception as exc:
         raise HTTPException(
@@ -767,13 +883,9 @@ async def get_products():
 @app.get("/api/categories", response_model=List[CategoryRecord])
 async def get_categories():
     try:
-        response = (
-            require_read_client()
-            .table("categories")
-            .select("id,name,created_at")
-            .order("created_at")
-            .execute()
-        )
+        response = _scope_query(
+            require_read_client().table("categories").select("id,name,created_at")
+        ).order("created_at").execute()
         return response.data
     except Exception as exc:
         raise HTTPException(
@@ -789,12 +901,9 @@ async def create_category(category: CategorySchema):
         payload["name"] = payload["name"].strip()
         if not payload["name"]:
             raise HTTPException(status_code=422, detail="Tên nhóm hàng không được để trống.")
-        response = (
-            require_write_client()
-            .table("categories")
-            .upsert(payload, on_conflict="name")
-            .execute()
-        )
+        response = require_write_client().table("categories").upsert(
+            _scope_payload(payload), on_conflict="vendor_id,name"
+        ).execute()
         if not response.data:
             raise HTTPException(status_code=400, detail="Thao tác lưu nhóm hàng thất bại.")
         return response.data[0]
@@ -814,13 +923,9 @@ async def update_category(category_id: UUID, category: CategorySchema):
         payload["name"] = payload["name"].strip()
         if not payload["name"]:
             raise HTTPException(status_code=422, detail="Tên nhóm hàng không được để trống.")
-        response = (
-            require_write_client()
-            .table("categories")
-            .update(payload)
-            .eq("id", str(category_id))
-            .execute()
-        )
+        response = _scope_query(
+            require_write_client().table("categories").update(_scope_payload(payload))
+        ).eq("id", str(category_id)).execute()
         if not response.data:
             raise HTTPException(status_code=404, detail="Không tìm thấy nhóm hàng.")
         return response.data[0]
@@ -836,7 +941,9 @@ async def update_category(category_id: UUID, category: CategorySchema):
 @app.delete("/api/categories/{category_id}")
 async def delete_category(category_id: UUID):
     try:
-        require_write_client().table("categories").delete().eq("id", str(category_id)).execute()
+        _scope_query(require_write_client().table("categories").delete()).eq(
+            "id", str(category_id)
+        ).execute()
         return {"status": "success", "message": f"Đã xóa nhóm hàng {category_id}"}
     except Exception as exc:
         raise HTTPException(
@@ -876,9 +983,9 @@ async def create_product(product: ProductSchema):
     try:
         data = jsonable_encoder(product)
         data["code"] = _code(data["code"])
-        response = (
-            require_write_client().table("products").upsert(data, on_conflict="code").execute()
-        )
+        response = require_write_client().table("products").upsert(
+            _scope_payload(data), on_conflict="vendor_id,code"
+        ).execute()
         return {"status": "success", "data": response.data[0]}
     except Exception as exc:
         raise HTTPException(
@@ -898,7 +1005,7 @@ async def create_products_bulk(products_list: List[ProductSchema]):
         client = require_write_client()
         data = []
         for chunk in _chunks(payload):
-            data.extend(await asyncio.to_thread(_run_upsert_chunk, client, "products", chunk, "code"))
+            data.extend(await asyncio.to_thread(_run_upsert_chunk, client, "products", chunk, "vendor_id,code"))
             await asyncio.sleep(0)
         return {
             "status": "success",
@@ -941,7 +1048,7 @@ async def bulk_upsert_products(products_list: List[ProductSchemaWithId]):
 @app.delete("/api/products/{code}")
 async def delete_product(code: str):
     try:
-        query = require_write_client().table("products").delete()
+        query = _scope_query(require_write_client().table("products").delete())
         if _is_uuid(code):
             query.eq("id", code)
         else:
@@ -961,7 +1068,9 @@ async def delete_product(code: str):
 @app.get("/api/stock")
 async def get_stock():
     try:
-        response = require_read_client().table("stock").select(_stock_select()).execute()
+        response = _scope_query(
+            require_read_client().table("stock").select(_stock_select())
+        ).execute()
         return {item["product_id"]: item["qty"] for item in response.data}
     except Exception as exc:
         raise HTTPException(
@@ -980,11 +1089,9 @@ async def upsert_stock(stock_item: StockSchema):
         data.pop("product_code", None)
         if not data.get("product_id"):
             raise HTTPException(status_code=400, detail="Thiếu product_id cho tồn kho.")
-        response = (
-            require_write_client().table("stock")
-            .upsert(data, on_conflict="product_id")
-            .execute()
-        )
+        response = require_write_client().table("stock").upsert(
+            _scope_payload(data), on_conflict="vendor_id,product_id"
+        ).execute()
         return {"status": "success", "data": response.data[0]}
     except Exception as exc:
         raise HTTPException(
@@ -996,12 +1103,9 @@ async def upsert_stock(stock_item: StockSchema):
 @app.get("/api/orders", response_model=List[DailyOrderRecord])
 async def get_daily_orders(date: date):
     try:
-        response = (
-            require_read_client().table("daily_orders")
-            .select(_order_select())
-            .eq("delivery_date", date)
-            .execute()
-        )
+        response = _scope_query(
+            require_read_client().table("daily_orders").select(_order_select())
+        ).eq("delivery_date", date).execute()
         return _attach_order_batches(response.data or [])
     except Exception as exc:
         raise HTTPException(
@@ -1017,8 +1121,7 @@ async def upsert_daily_order(order_item: OrderUpsertSchema):
         client = require_write_client()
         if data["qty"] <= 0 and not data["batches"]:
             (
-                client.table("daily_orders")
-                .delete()
+                _scope_query(client.table("daily_orders").delete())
                 .eq("delivery_date", data["delivery_date"])
                 .eq("product_id", str(data["product_id"]))
                 .eq("school_id", data["school_id"])
@@ -1026,14 +1129,10 @@ async def upsert_daily_order(order_item: OrderUpsertSchema):
             )
             return {"status": "deleted", "message": "Đã xóa phân bổ do SL bằng 0."}
 
-        response = (
-            client.table("daily_orders")
-            .upsert(
-                {key: value for key, value in data.items() if key != "batches"},
-                on_conflict="delivery_date,product_id,school_id",
-            )
-            .execute()
-        )
+        response = client.table("daily_orders").upsert(
+            _scope_payload({key: value for key, value in data.items() if key != "batches"}),
+            on_conflict="vendor_id,delivery_date,product_id,school_id",
+        ).execute()
         parent = response.data[0]
         _sync_order_batches(client, str(parent["id"]), data["batches"])
         parent["batches"] = data["batches"]
@@ -1086,7 +1185,9 @@ async def bulk_upsert_daily_orders(orders_list: List[OrderUpsertSchema]):
 @app.delete("/api/orders")
 async def clear_daily_orders(date: date):
     try:
-        require_write_client().table("daily_orders").delete().eq("delivery_date", date.isoformat()).execute()
+        _scope_query(require_write_client().table("daily_orders").delete()).eq(
+            "delivery_date", date.isoformat()
+        ).execute()
         return {"status": "success", "message": f"Đã xóa sạch dữ liệu ngày {date}"}
     except Exception as exc:
         raise HTTPException(

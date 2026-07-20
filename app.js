@@ -101,7 +101,8 @@ createApp({
     const deliveryDate = ref(state.deliveryDate);
     const parserText = ref('');
     const parserPreview = ref([]);
-    const toasts = ref([]);
+    const notifications = ref([]);
+    const toasts = notifications;
     const productFilter = ref('');
     const productCategoryFilter = ref('');
     const schoolFilter = ref('');
@@ -120,7 +121,14 @@ createApp({
     const currentUser = ref(null);
     const users = ref([]);
     const isAdmin = computed(() => currentUser.value?.role === 'admin');
+    const userRole = computed(() => currentUser.value?.role || 'staff');
+    const canManageCatalog = computed(() => ['admin', 'owner', 'manager'].includes(userRole.value));
+    const canMutate = computed(() => userRole.value !== 'report-viewer');
+    const mustChangePassword = ref(false);
     const userListLoading = ref(false);
+    const vendorUserForm = ref({ username: '', nickname: '', role: 'staff' });
+    const vendorUserProvisioning = ref(false);
+    const provisionedPin = ref('');
     const loginForm = ref({ username: '', password: '' });
     const authError = ref('');
     const isLoggingIn = ref(false);
@@ -129,6 +137,8 @@ createApp({
     const passwordForm = ref({ oldPassword: '', newPassword: '', confirmPassword: '' });
     const userCPError = ref('');
     const userCPSaving = ref(false);
+    const showPasswordOnboarding = ref(false);
+    const onboardingPasswordForm = ref({ oldPassword: '', newPassword: '', confirmPassword: '' });
     const isSubmittingCategory = ref(false);
     const deferredPrompt = ref(null);
     const iosGuideDismissed = ref(false);
@@ -201,9 +211,97 @@ createApp({
       { id: 'parser', label: 'Dán dữ liệu', icon: 'fa-solid fa-paste' },
       { id: 'catalog', label: 'Danh mục', icon: 'fa-solid fa-book' },
       { id: 'stock', label: 'Tồn kho', icon: 'fa-solid fa-boxes-stacked' },
+      { id: 'analytics', label: 'Báo Cáo Thống Kê', icon: 'fa-solid fa-chart-pie' },
       { id: 'receipts', label: 'Biên bản in', icon: 'fa-solid fa-print' },
       { id: 'debug', label: 'Debug', icon: 'fa-solid fa-terminal' }
     ];
+
+    const analyticsRange = ref('day');
+    const schoolChartCanvas = ref(null);
+    const categoryChartCanvas = ref(null);
+    const trendChartCanvas = ref(null);
+    const analyticsCharts = [];
+    const analyticsMetrics = computed(() => {
+      const schoolTotals = schools.value.map((school) => ({
+        id: schoolKey(school),
+        name: school.name || school.code,
+        spend: 0,
+        volume: 0
+      }));
+      const schoolById = new Map(schoolTotals.map((school) => [school.id, school]));
+      const categoryTotals = new Map();
+      let totalVolume = 0;
+      let totalSpend = 0;
+      let activeCells = 0;
+      let fulfilledCells = 0;
+
+      rows.value.forEach((row) => {
+        const product = resolveProduct(row.productId || row.shortcut);
+        if (!product) return;
+        const category = categories.value.find((item) => String(item.id) === String(product.category_id));
+        const categoryName = category?.name || 'Chưa phân nhóm';
+        schools.value.forEach((school) => {
+          const quantity = num(row.schoolQtys?.[schoolKey(school)]);
+          if (quantity <= 0) return;
+          const spend = quantity * num(product.price);
+          const schoolTotal = schoolById.get(schoolKey(school));
+          if (schoolTotal) {
+            schoolTotal.volume += quantity;
+            schoolTotal.spend += spend;
+          }
+          categoryTotals.set(categoryName, num(categoryTotals.get(categoryName)) + quantity);
+          totalVolume += quantity;
+          totalSpend += spend;
+          activeCells += 1;
+          fulfilledCells += quantity > 0 ? 1 : 0;
+        });
+      });
+
+      return {
+        totalSpend: Math.round(totalSpend),
+        totalVolume: round3(totalVolume),
+        fulfillment: activeCells ? Math.round((fulfilledCells / activeCells) * 100) : 0,
+        schoolTotals: schoolTotals.sort((left, right) => right.spend - left.spend),
+        categoryTotals: Array.from(categoryTotals, ([name, volume]) => ({ name, volume }))
+          .sort((left, right) => right.volume - left.volume),
+        trend: [{ label: deliveryDate.value, volume: round3(totalVolume) }]
+      };
+    });
+
+    function renderAnalyticsCharts() {
+      if (!window.Chart || currentTab.value !== 'analytics') return;
+      analyticsCharts.splice(0).forEach((chart) => chart.destroy());
+      const metrics = analyticsMetrics.value;
+      const chartConfigs = [
+        [schoolChartCanvas.value, {
+          type: 'bar',
+          data: {
+            labels: metrics.schoolTotals.map((school) => school.name),
+            datasets: [{ label: 'Chi phí', data: metrics.schoolTotals.map((school) => school.spend), backgroundColor: '#10b981' }]
+          },
+          options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } } }
+        }],
+        [categoryChartCanvas.value, {
+          type: 'doughnut',
+          data: {
+            labels: metrics.categoryTotals.map((category) => category.name),
+            datasets: [{ data: metrics.categoryTotals.map((category) => category.volume), backgroundColor: ['#10b981', '#0ea5e9', '#8b5cf6', '#f59e0b', '#ef4444'] }]
+          },
+          options: { responsive: true, maintainAspectRatio: false }
+        }],
+        [trendChartCanvas.value, {
+          type: 'line',
+          data: {
+            labels: metrics.trend.map((point) => point.label),
+            datasets: [{ label: 'Khối lượng', data: metrics.trend.map((point) => point.volume), borderColor: '#0ea5e9', backgroundColor: 'rgba(14,165,233,.15)', fill: true, tension: .3 }]
+          },
+          options: { responsive: true, maintainAspectRatio: false }
+        }]
+      ];
+      chartConfigs.forEach(([canvas, config]) => {
+        if (canvas) analyticsCharts.push(new window.Chart(canvas, config));
+      });
+    }
 
     function logError(context, error) {
       const message = error?.message || String(error);
@@ -219,11 +317,13 @@ createApp({
 
     function addToast(message, type = 'info') {
       const id = uid();
-      toasts.value.push({ id, message, type });
+      notifications.value.push({ id, message, type });
       setTimeout(() => {
-        toasts.value = toasts.value.filter((toast) => toast.id !== id);
-      }, 3200);
+        notifications.value = notifications.value.filter((notification) => notification.id !== id);
+      }, 4000);
     }
+
+    const triggerNotification = addToast;
 
     function handleAuthCallback() {
       const tokenParam = new URLSearchParams(window.location.search).get('auth_token');
@@ -835,6 +935,8 @@ createApp({
           throw new Error('Phiên đăng nhập không hợp lệ.');
         }
         await initializeAuthenticatedState();
+        mustChangePassword.value = Boolean(response.must_change_password || currentUser.value?.must_change_password);
+        showPasswordOnboarding.value = mustChangePassword.value;
         addToast(`Xin chào ${response.user.username}`, 'success');
       } catch (error) {
         authError.value = error.message || 'Đăng nhập thất bại.';
@@ -861,7 +963,9 @@ createApp({
       if (!authToken.value) return;
       try {
         currentUser.value = await apiJson('/api/auth/me');
-        if (currentUser.value.role === 'admin') {
+        mustChangePassword.value = Boolean(currentUser.value?.must_change_password);
+        showPasswordOnboarding.value = mustChangePassword.value;
+        if (['admin', 'owner', 'manager'].includes(currentUser.value.role)) {
           userListLoading.value = true;
           users.value = await apiJson('/api/auth/users');
         }
@@ -905,6 +1009,27 @@ createApp({
       }
     }
 
+    async function provisionVendorUser() {
+      if (vendorUserProvisioning.value) return;
+      vendorUserProvisioning.value = true;
+      userCPError.value = '';
+      provisionedPin.value = '';
+      try {
+        const response = await apiJson('/api/auth/users', {
+          method: 'POST',
+          body: JSON.stringify(vendorUserForm.value)
+        });
+        provisionedPin.value = response.temporary_pin || '';
+        vendorUserForm.value = { username: '', nickname: '', role: 'staff' };
+        users.value = await apiJson('/api/auth/users');
+        addToast('Đã tạo tài khoản vendor với PIN tạm thời.', 'success');
+      } catch (error) {
+        userCPError.value = error.message || 'Không thể tạo tài khoản vendor.';
+      } finally {
+        vendorUserProvisioning.value = false;
+      }
+    }
+
     async function changePassword() {
       if (userCPSaving.value) return;
       userCPError.value = '';
@@ -922,9 +1047,42 @@ createApp({
           })
         });
         passwordForm.value = { oldPassword: '', newPassword: '', confirmPassword: '' };
+        mustChangePassword.value = false;
         addToast('Đã đổi mật khẩu thành công.', 'success');
       } catch (error) {
         userCPError.value = error.message || 'Không thể đổi mật khẩu.';
+      } finally {
+        userCPSaving.value = false;
+      }
+    }
+
+    async function submitPasswordOnboarding() {
+      if (userCPSaving.value) return;
+      userCPError.value = '';
+      const form = onboardingPasswordForm.value;
+      if (form.newPassword.length < 8) {
+        userCPError.value = 'Mật khẩu mới phải có ít nhất 8 ký tự.';
+        return;
+      }
+      if (form.newPassword !== form.confirmPassword) {
+        userCPError.value = 'Mật khẩu mới và phần xác nhận không khớp.';
+        return;
+      }
+      userCPSaving.value = true;
+      try {
+        await apiJson('/api/auth/change-password', {
+          method: 'POST',
+          body: JSON.stringify({
+            old_password: form.oldPassword,
+            new_password: form.newPassword
+          })
+        });
+        onboardingPasswordForm.value = { oldPassword: '', newPassword: '', confirmPassword: '' };
+        mustChangePassword.value = false;
+        showPasswordOnboarding.value = false;
+        addToast('Đã thiết lập mật khẩu bảo mật.', 'success');
+      } catch (error) {
+        userCPError.value = error.message || 'Không thể thiết lập mật khẩu.';
       } finally {
         userCPSaving.value = false;
       }
@@ -934,6 +1092,8 @@ createApp({
       authToken.value = '';
       currentUser.value = null;
       users.value = [];
+      mustChangePassword.value = false;
+      showPasswordOnboarding.value = false;
       localStorage.removeItem('auth_token');
       authError.value = '';
     }
@@ -2314,6 +2474,7 @@ createApp({
     watch([schools, products, stockMap, rows], () => {
       persistLocal();
     }, { deep: true });
+    watch([currentTab, analyticsRange, analyticsMetrics], () => nextTick(renderAnalyticsCharts), { deep: true });
 
     onMounted(async () => {
       handleAuthCallback();
@@ -2374,7 +2535,9 @@ createApp({
       stockMap,
       parserText,
       parserPreview,
+      notifications,
       toasts,
+      triggerNotification,
       productFilter,
       productCategoryFilter,
       schoolFilter,
@@ -2400,7 +2563,14 @@ createApp({
       currentUser,
       users,
       isAdmin,
+      userRole,
+      canManageCatalog,
+      canMutate,
+      mustChangePassword,
       userListLoading,
+      vendorUserForm,
+      vendorUserProvisioning,
+      provisionedPin,
       loginForm,
       authError,
       isLoggingIn,
@@ -2409,10 +2579,19 @@ createApp({
       passwordForm,
       userCPError,
       userCPSaving,
+      showPasswordOnboarding,
+      onboardingPasswordForm,
       openUserCPModal,
       closeUserCPModal,
       saveUserProfile,
+      provisionVendorUser,
       changePassword,
+      submitPasswordOnboarding,
+      analyticsRange,
+      analyticsMetrics,
+      schoolChartCanvas,
+      categoryChartCanvas,
+      trendChartCanvas,
       loginWithCredentials,
       loginWithGoogle,
       logout,

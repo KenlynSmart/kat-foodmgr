@@ -9,6 +9,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
   <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
   <link rel="manifest" href="manifest.json">
   <meta name="theme-color" content="#16a34a">
   <link rel="stylesheet" href="styles.css">
@@ -99,12 +100,15 @@
       </div>
     </header>
 
-    <div class="fixed top-4 right-4 z-50 space-y-2 no-print pointer-events-none">
-      <div v-for="toast in toasts" :key="toast.id"
-        class="pointer-events-auto rounded-2xl px-4 py-3 shadow-lg border text-sm max-w-sm"
-        :class="toast.type === 'success' ? 'bg-emerald-50 border-emerald-200 text-emerald-800' : toast.type === 'error' ? 'bg-rose-50 border-rose-200 text-rose-800' : 'bg-slate-50 border-slate-200 text-slate-800'">
-        {{ toast.message }}
+    <div class="fixed top-4 right-4 z-[9999] flex flex-col gap-2 w-80 pointer-events-none no-print">
+      <TransitionGroup name="notification" tag="div" class="flex flex-col gap-2">
+      <div v-for="notification in notifications" :key="notification.id"
+        class="pointer-events-auto flex items-center gap-3 rounded-xl border border-slate-100 bg-white p-4 shadow-xl text-sm"
+        :class="notification.type === 'success' ? 'text-emerald-800' : notification.type === 'error' ? 'text-rose-800' : notification.type === 'warn' ? 'text-amber-800' : 'text-slate-800'">
+        <i class="fa-solid" :class="notification.type === 'success' ? 'fa-circle-check text-emerald-600' : notification.type === 'error' ? 'fa-circle-xmark text-rose-600' : 'fa-circle-info text-slate-500'"></i>
+        <span>{{ notification.message }}</span>
       </div>
+      </TransitionGroup>
     </div>
 
     <div v-if="showIOSGuide" class="fixed inset-x-3 bottom-3 z-50 rounded-2xl border border-emerald-200 bg-white p-4 text-sm text-slate-700 shadow-2xl md:left-auto md:max-w-md">
@@ -168,6 +172,38 @@
             </button>
           </form>
         </div>
+      </div>
+    </div>
+
+    <div v-if="showPasswordOnboarding" class="fixed inset-0 z-[10000] flex items-center justify-center bg-slate-950/85 p-4 no-print">
+      <div class="w-full max-w-lg rounded-3xl bg-white p-6 shadow-2xl">
+        <div class="flex items-center gap-3">
+          <div class="grid h-12 w-12 place-items-center rounded-2xl bg-amber-100 text-amber-700">
+            <i class="fa-solid fa-shield-halved text-xl"></i>
+          </div>
+          <div>
+            <h2 class="text-xl font-bold text-slate-900">Thiết lập mật khẩu bắt buộc</h2>
+            <p class="text-sm text-slate-500">Mã PIN tạm thời chỉ dùng cho lần đăng nhập đầu tiên.</p>
+          </div>
+        </div>
+        <p v-if="userCPError" class="mt-4 rounded-xl bg-rose-50 px-3 py-2 text-sm text-rose-700">{{ userCPError }}</p>
+        <form @submit.prevent="submitPasswordOnboarding" class="mt-5 space-y-4">
+          <label class="block">
+            <span class="mb-1 block text-sm font-semibold text-slate-600">PIN tạm thời</span>
+            <input v-model="onboardingPasswordForm.oldPassword" type="password" inputmode="numeric" maxlength="4" class="input w-full" required>
+          </label>
+          <label class="block">
+            <span class="mb-1 block text-sm font-semibold text-slate-600">Mật khẩu mới</span>
+            <input v-model="onboardingPasswordForm.newPassword" type="password" minlength="8" class="input w-full" autocomplete="new-password" required>
+          </label>
+          <label class="block">
+            <span class="mb-1 block text-sm font-semibold text-slate-600">Xác nhận mật khẩu mới</span>
+            <input v-model="onboardingPasswordForm.confirmPassword" type="password" minlength="8" class="input w-full" autocomplete="new-password" required>
+          </label>
+          <button type="submit" class="btn-primary w-full justify-center" :disabled="userCPSaving">
+            {{ userCPSaving ? 'Đang lưu...' : 'Thiết lập và tiếp tục' }}
+          </button>
+        </form>
       </div>
     </div>
 
@@ -356,6 +392,71 @@
               <div class="mt-1 text-2xl font-extrabold text-emerald-700">{{ money(importSummary.totalRevenue) }}</div>
             </div>
           </div>
+        </div>
+      </section>
+
+      <section v-show="currentTab === 'analytics'" class="space-y-6">
+        <div class="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+          <div>
+            <h2 class="section-title">Báo Cáo Thống Kê</h2>
+            <p class="section-subtitle">Tổng hợp chi phí, khối lượng và phân bổ theo dữ liệu đang có.</p>
+          </div>
+          <select v-model="analyticsRange" class="input w-full md:w-40">
+            <option value="day">Theo ngày</option>
+            <option value="week">Theo tuần</option>
+            <option value="month">Theo tháng</option>
+          </select>
+        </div>
+        <div class="grid gap-4 md:grid-cols-3">
+          <div class="panel border-l-4 border-emerald-500">
+            <div class="text-xs font-bold uppercase text-slate-500">Tổng chi phí cung ứng</div>
+            <div class="mt-2 text-2xl font-extrabold text-emerald-700">{{ money(analyticsMetrics.totalSpend) }}</div>
+          </div>
+          <div class="panel border-l-4 border-sky-500">
+            <div class="text-xs font-bold uppercase text-slate-500">Khối lượng thực phẩm</div>
+            <div class="mt-2 text-2xl font-extrabold text-sky-700">{{ qty(analyticsMetrics.totalVolume) }}</div>
+          </div>
+          <div class="panel border-l-4 border-violet-500">
+            <div class="text-xs font-bold uppercase text-slate-500">Tỷ lệ hoàn thành</div>
+            <div class="mt-2 text-2xl font-extrabold text-violet-700">{{ analyticsMetrics.fulfillment }}%</div>
+          </div>
+        </div>
+        <div class="grid gap-6 lg:grid-cols-3">
+          <div class="panel lg:col-span-2 space-y-4">
+            <div class="flex items-center justify-between">
+              <h3 class="font-bold text-slate-900">Chi phí theo từng trường</h3>
+              <span class="text-xs text-slate-500">{{ analyticsRange === 'day' ? deliveryDate : analyticsRange === 'week' ? 'Tuần hiện tại' : 'Tháng hiện tại' }}</span>
+            </div>
+            <div v-for="school in analyticsMetrics.schoolTotals" :key="school.id" class="space-y-1">
+              <div class="flex justify-between gap-3 text-sm"><span class="truncate">{{ school.name }}</span><strong>{{ money(school.spend) }}</strong></div>
+              <div class="h-2 overflow-hidden rounded-full bg-slate-100">
+                <div class="h-full rounded-full bg-emerald-500" :style="{ width: `${analyticsMetrics.schoolTotals[0]?.spend ? Math.max(4, (school.spend / analyticsMetrics.schoolTotals[0].spend) * 100) : 0}%` }"></div>
+              </div>
+            </div>
+            <div v-if="!analyticsMetrics.schoolTotals.length" class="text-sm italic text-slate-500">Chưa có dữ liệu trường.</div>
+            <div class="h-64"><canvas ref="schoolChartCanvas"></canvas></div>
+          </div>
+          <div class="panel space-y-4">
+            <h3 class="font-bold text-slate-900">Cơ cấu nhóm hàng</h3>
+            <div v-for="category in analyticsMetrics.categoryTotals" :key="category.name" class="flex items-center justify-between gap-3 rounded-xl bg-slate-50 px-3 py-2 text-sm">
+              <span class="truncate">{{ category.name }}</span>
+              <strong class="text-emerald-700">{{ qty(category.volume) }}</strong>
+            </div>
+            <div v-if="!analyticsMetrics.categoryTotals.length" class="text-sm italic text-slate-500">Chưa có dữ liệu nhóm hàng.</div>
+            <div class="h-64"><canvas ref="categoryChartCanvas"></canvas></div>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="flex items-center justify-between">
+            <h3 class="font-bold text-slate-900">Xu hướng biến động số lượng</h3>
+            <span class="text-xs text-slate-500">{{ analyticsMetrics.trend[0]?.label }}</span>
+          </div>
+          <div class="mt-4 flex h-32 items-end gap-3 rounded-xl bg-slate-50 p-4">
+            <div v-for="point in analyticsMetrics.trend" :key="point.label" class="flex h-full flex-1 items-end justify-center">
+              <div class="w-full max-w-20 rounded-t-xl bg-sky-500" :style="{ height: `${point.volume ? 100 : 4}%` }" :title="`${point.label}: ${qty(point.volume)}`"></div>
+            </div>
+          </div>
+          <div class="mt-4 h-56"><canvas ref="trendChartCanvas"></canvas></div>
         </div>
       </section>
 
@@ -548,7 +649,7 @@
             </table>
           </div>
         </div>
-        <div v-if="isAdmin" class="panel space-y-4 border-2 border-emerald-200">
+        <div v-if="canManageCatalog" class="panel space-y-4 border-2 border-emerald-200">
           <div class="flex items-center justify-between gap-3">
             <div>
               <h2 class="section-title">Quản Lý Tài Khoản</h2>
@@ -558,6 +659,21 @@
               <i class="fa-solid fa-spinner fa-spin"></i> Đang tải
             </span>
             <span v-else class="badge">{{ users.length }} tài khoản</span>
+          </div>
+          <form @submit.prevent="provisionVendorUser" class="grid gap-3 rounded-2xl border border-emerald-100 bg-emerald-50 p-4 md:grid-cols-4">
+            <input v-model="vendorUserForm.username" class="input" placeholder="Tên đăng nhập" required>
+            <input v-model="vendorUserForm.nickname" class="input" placeholder="Tên hiển thị">
+            <select v-model="vendorUserForm.role" class="input">
+              <option value="report-viewer">report-viewer</option>
+              <option value="staff">staff</option>
+              <option value="manager">manager</option>
+            </select>
+            <button type="submit" class="btn-primary justify-center" :disabled="vendorUserProvisioning">
+              {{ vendorUserProvisioning ? 'Đang tạo...' : 'Cấp tài khoản + PIN' }}
+            </button>
+          </form>
+          <div v-if="provisionedPin" class="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+            PIN tạm thời: <strong class="text-lg tracking-widest">{{ provisionedPin }}</strong>
           </div>
           <div class="overflow-x-auto">
             <table class="min-w-full text-sm">
