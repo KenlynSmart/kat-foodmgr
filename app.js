@@ -214,7 +214,7 @@ createApp({
 
     function handleAuthCallback() {
       const tokenParam = new URLSearchParams(window.location.search).get('auth_token');
-      if (!tokenParam) return false;
+      if (!tokenParam || tokenParam === 'null') return false;
       authToken.value = tokenParam;
       localStorage.setItem('auth_token', tokenParam);
       window.history.replaceState({}, document.title, window.location.pathname);
@@ -662,7 +662,9 @@ createApp({
       }
       if (!response.ok) {
         const detail = typeof data === 'object' && data?.detail ? data.detail : text || `HTTP ${response.status}`;
-        throw new Error(detail);
+        const error = new Error(detail);
+        error.status = response.status;
+        throw error;
       }
       return data;
     }
@@ -680,6 +682,10 @@ createApp({
         localStorage.setItem('auth_token', response.access_token);
         loginForm.value.password = '';
         await loadAuthUser();
+        if (!authToken.value) {
+          throw new Error('Phiên đăng nhập không hợp lệ.');
+        }
+        await initializeAuthenticatedState();
         addToast(`Xin chào ${response.user.username}`, 'success');
       } catch (error) {
         authError.value = error.message || 'Đăng nhập thất bại.';
@@ -710,9 +716,11 @@ createApp({
           userListLoading.value = true;
           users.value = await apiJson('/api/auth/users');
         }
+        return true;
       } catch (error) {
         logError('loadAuthUser', error);
-        logout();
+        if (error?.status === 401) logout();
+        return false;
       } finally {
         userListLoading.value = false;
       }
