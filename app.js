@@ -110,7 +110,6 @@ createApp({
     const vendorSaving = ref(false);
     const editingVendorId = ref('');
     const isAdmin = computed(() => currentUser.value?.role === 'admin');
-    const visibleTabs = computed(() => isAdmin.value ? adminTabs : tabs);
     const subscriptionCodes = ref([]);
     const subscriptionMetrics = ref({ total_revenue: 0, active_paid_vendors: 0, generated_codes: 0, used_codes: 0 });
     const subscriptionCodeForm = ref({ duration_months: 1, price_allocated: 0 });
@@ -2780,7 +2779,7 @@ createApp({
 
     return {
       tabs,
-      visibleTabs,
+      adminTabs,
       currentTab,
       deliveryDate,
       changeDeliveryDate,
