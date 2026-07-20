@@ -56,6 +56,7 @@ createApp({
       id: uid(),
       isDirty: false,
       shortcut: '',
+      searchQuery: '',
       productName: '',
       unit: '',
       price: 0,
@@ -64,6 +65,7 @@ createApp({
       subTotal: 0,
       suggestions: [],
       suggestIndex: 0,
+      showDropdown: false,
       showSuggestions: false,
       suggestionPosition: {}
     });
@@ -120,6 +122,11 @@ createApp({
     const loginForm = ref({ username: '', password: '' });
     const authError = ref('');
     const isLoggingIn = ref(false);
+    const showUserCPModal = ref(false);
+    const userForm = ref({ nickname: '' });
+    const passwordForm = ref({ oldPassword: '', newPassword: '', confirmPassword: '' });
+    const userCPError = ref('');
+    const userCPSaving = ref(false);
     const isSubmittingCategory = ref(false);
     const deferredPrompt = ref(null);
     const iosGuideDismissed = ref(false);
@@ -282,6 +289,7 @@ createApp({
 
     function ensureRowSchools(row) {
       if (row.isDirty === undefined) row.isDirty = false;
+      if (row.searchQuery === undefined) row.searchQuery = row.shortcut || '';
       if (!row.schoolQtys) row.schoolQtys = {};
       schools.value.forEach((school) => {
         const key = schoolKey(school);
@@ -337,8 +345,9 @@ createApp({
           left: `${rect.left + window.scrollX}px`
         };
       }
-      row.suggestions = findSuggestions(row.shortcut);
+      row.suggestions = findSuggestions(row.searchQuery);
       row.suggestIndex = 0;
+      row.showDropdown = true;
       row.showSuggestions = true;
     }
 
@@ -347,16 +356,22 @@ createApp({
     }
 
     function closeSuggestions(row) {
-      setTimeout(() => { row.showSuggestions = false; }, 120);
+      setTimeout(() => {
+        row.searchQuery = row.shortcut || '';
+        row.showDropdown = false;
+        row.showSuggestions = false;
+      }, 120);
     }
 
     function pickProduct(row, product) {
       row.shortcut = product.code;
+      row.searchQuery = product.code;
       row.productId = productKey(product);
       row.productName = product.name;
       row.unit = product.unit;
       row.price = num(product.price);
       row.suggestions = [];
+      row.showDropdown = false;
       row.showSuggestions = false;
       recalcRow(row);
       markRowDirty(row);
@@ -364,26 +379,15 @@ createApp({
     }
 
     function onShortcutInput(row) {
-      row.shortcut = String(row.shortcut || '').trim().toLowerCase();
-      row.suggestions = findSuggestions(row.shortcut);
+      row.searchQuery = String(row.searchQuery || '').trim().toLowerCase();
+      row.suggestions = findSuggestions(row.searchQuery);
       row.suggestIndex = 0;
-      row.showSuggestions = true;
-      markRowDirty(row);
-      const exact = resolveProduct(row.shortcut);
-      if (exact) {
-        pickProduct(row, exact);
-        return;
-      }
-      row.productId = '';
-      row.productName = '';
-      row.unit = '';
-      row.price = 0;
-      recalcRow(row);
-      scheduleSync();
+      row.showDropdown = Boolean(row.searchQuery && row.suggestions.length);
+      row.showSuggestions = row.showDropdown;
     }
 
     function onShortcutKeydown(event, row) {
-      if (!row.suggestions.length) return;
+      if (!row.suggestions.length || !row.showDropdown) return;
       if (event.key === 'ArrowDown') {
         event.preventDefault();
         row.suggestIndex = (row.suggestIndex + 1) % row.suggestions.length;
@@ -394,6 +398,8 @@ createApp({
         event.preventDefault();
         pickProduct(row, row.suggestions[row.suggestIndex] || row.suggestions[0]);
       } else if (event.key === 'Escape') {
+        row.searchQuery = row.shortcut || '';
+        row.showDropdown = false;
         row.showSuggestions = false;
       }
     }
@@ -736,6 +742,61 @@ createApp({
         return false;
       } finally {
         userListLoading.value = false;
+      }
+    }
+
+    function openUserCPModal() {
+      userForm.value = { nickname: currentUser.value?.nickname || '' };
+      passwordForm.value = { oldPassword: '', newPassword: '', confirmPassword: '' };
+      userCPError.value = '';
+      showUserCPModal.value = true;
+    }
+
+    function closeUserCPModal() {
+      showUserCPModal.value = false;
+      userCPError.value = '';
+      passwordForm.value = { oldPassword: '', newPassword: '', confirmPassword: '' };
+    }
+
+    async function saveUserProfile() {
+      if (userCPSaving.value) return;
+      userCPError.value = '';
+      userCPSaving.value = true;
+      try {
+        currentUser.value = await apiJson('/api/auth/profile', {
+          method: 'PUT',
+          body: JSON.stringify({ nickname: userForm.value.nickname.trim() || null })
+        });
+        addToast('Đã cập nhật thông tin cá nhân.', 'success');
+      } catch (error) {
+        userCPError.value = error.message || 'Không thể cập nhật thông tin cá nhân.';
+      } finally {
+        userCPSaving.value = false;
+      }
+    }
+
+    async function changePassword() {
+      if (userCPSaving.value) return;
+      userCPError.value = '';
+      if (passwordForm.value.newPassword !== passwordForm.value.confirmPassword) {
+        userCPError.value = 'Mật khẩu mới và phần xác nhận không khớp.';
+        return;
+      }
+      userCPSaving.value = true;
+      try {
+        await apiJson('/api/auth/change-password', {
+          method: 'POST',
+          body: JSON.stringify({
+            old_password: passwordForm.value.oldPassword,
+            new_password: passwordForm.value.newPassword
+          })
+        });
+        passwordForm.value = { oldPassword: '', newPassword: '', confirmPassword: '' };
+        addToast('Đã đổi mật khẩu thành công.', 'success');
+      } catch (error) {
+        userCPError.value = error.message || 'Không thể đổi mật khẩu.';
+      } finally {
+        userCPSaving.value = false;
       }
     }
 
@@ -1227,6 +1288,7 @@ createApp({
       rows.value.forEach((row) => {
         if (norm(row.shortcut) === norm(code)) {
           row.shortcut = '';
+          row.searchQuery = '';
           row.productId = '';
           row.productName = '';
           row.unit = '';
@@ -2106,6 +2168,15 @@ createApp({
       loginForm,
       authError,
       isLoggingIn,
+      showUserCPModal,
+      userForm,
+      passwordForm,
+      userCPError,
+      userCPSaving,
+      openUserCPModal,
+      closeUserCPModal,
+      saveUserProfile,
+      changePassword,
       loginWithCredentials,
       loginWithGoogle,
       logout,

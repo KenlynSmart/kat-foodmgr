@@ -91,9 +91,19 @@ class LoginSchema(BaseModel):
     password: str
 
 
+class ProfileUpdateSchema(BaseModel):
+    nickname: Optional[str] = Field(default=None, max_length=100)
+
+
+class ChangePasswordSchema(BaseModel):
+    old_password: str = Field(..., min_length=1)
+    new_password: str = Field(..., min_length=8)
+
+
 class AuthUser(BaseModel):
     id: UUID
     username: str
+    nickname: Optional[str] = None
     email: Optional[str] = None
     provider: str
     role: str
@@ -125,6 +135,7 @@ def _auth_user_from_row(row: Dict[str, Any]) -> AuthUser:
     return AuthUser(
         id=UUID(str(row["id"])),
         username=str(row["username"]),
+        nickname=row.get("nickname"),
         email=row.get("email"),
         provider=str(row["provider"]),
         role=str(row["role"]),
@@ -306,7 +317,7 @@ async def login(credentials: LoginSchema):
         response = (
             require_read_client()
             .table("users")
-            .select("id,username,password,email,provider,role,status")
+            .select("id,username,nickname,password,email,provider,role,status")
             .eq("username", credentials.username.strip())
             .eq("provider", "local")
             .limit(1)
@@ -373,7 +384,7 @@ async def google_callback(
         client = require_write_client()
         existing = (
             client.table("users")
-            .select("id,username,password,email,provider,role,status")
+            .select("id,username,nickname,password,email,provider,role,status")
             .eq("email", email)
             .limit(1)
             .execute()
@@ -414,7 +425,7 @@ async def current_user(user: Dict[str, Any] = Depends(require_bearer_user)):
         response = (
             require_read_client()
             .table("users")
-            .select("id,username,email,provider,role,status")
+            .select("id,username,nickname,email,provider,role,status")
             .eq("id", user["sub"])
             .limit(1)
             .execute()
@@ -434,13 +445,70 @@ async def list_users(_: Dict[str, Any] = Depends(require_admin_user)):
         response = (
             require_read_client()
             .table("users")
-            .select("id,username,email,provider,role,status")
+            .select("id,username,nickname,email,provider,role,status")
             .order("created_at")
             .execute()
         )
         return [_auth_user_from_row(row) for row in response.data or []]
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Không thể tải danh sách tài khoản: {exc}") from exc
+
+
+@app.put("/api/auth/profile", response_model=AuthUser)
+async def update_profile(
+    profile: ProfileUpdateSchema,
+    user: Dict[str, Any] = Depends(require_bearer_user),
+):
+    try:
+        nickname = profile.nickname.strip() if profile.nickname else None
+        response = (
+            require_write_client()
+            .table("users")
+            .update({"nickname": nickname})
+            .eq("id", user["sub"])
+            .execute()
+        )
+        if not response.data:
+            raise HTTPException(status_code=404, detail="Không tìm thấy tài khoản.")
+        return _auth_user_from_row(response.data[0])
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Không thể cập nhật thông tin cá nhân: {exc}") from exc
+
+
+@app.post("/api/auth/change-password")
+async def change_password(
+    payload: ChangePasswordSchema,
+    user: Dict[str, Any] = Depends(require_bearer_user),
+):
+    try:
+        client = require_write_client()
+        response = (
+            client.table("users")
+            .select("id,password,status")
+            .eq("id", user["sub"])
+            .limit(1)
+            .execute()
+        )
+        record = response.data[0] if response.data else None
+        if not record or record["status"] != "active":
+            raise HTTPException(status_code=401, detail="Tài khoản không còn hoạt động.")
+        if not record.get("password") or not pwd_context.verify(payload.old_password, record["password"]):
+            raise HTTPException(status_code=401, detail="Mật khẩu hiện tại không đúng.")
+        updated = (
+            client.table("users")
+            .update({"password": pwd_context.hash(payload.new_password)})
+            .eq("id", user["sub"])
+            .execute()
+        )
+        if not updated.data:
+            raise HTTPException(status_code=404, detail="Không thể cập nhật mật khẩu.")
+        return {"status": "success", "message": "Đã cập nhật mật khẩu."}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Không thể đổi mật khẩu: {exc}") from exc
 
 
 @app.get("/", response_class=HTMLResponse)
