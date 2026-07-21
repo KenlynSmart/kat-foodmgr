@@ -21,6 +21,12 @@ createApp({
     };
     const round3 = (value) => Math.round(num(value) * 1000) / 1000;
     const money = (value) => new Intl.NumberFormat('vi-VN', { maximumFractionDigits: 0 }).format(Math.round(num(value))) + ' đ';
+    const formatCompactPrice = (value) => {
+      const price = num(value);
+      if (!price) return '0đ';
+      if (price >= 1000) return `${(price / 1000).toLocaleString('vi-VN')}k`;
+      return `${price}đ`;
+    };
     const qty = (value) => new Intl.NumberFormat('vi-VN', { maximumFractionDigits: 3 }).format(round3(value));
     const nowText = () => new Date().toLocaleString('vi-VN');
 
@@ -2912,6 +2918,7 @@ createApp({
       schoolFilter,
       stockFilter,
       matrixPage,
+      formatCompactPrice,
       activeFocusRow,
       activeFocusCol,
       handleCellFocus,

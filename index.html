@@ -285,14 +285,10 @@
             <div class="text-xs text-slate-500">Local-first · chỉ đồng bộ khi người dùng bấm nút</div>
           </div>
           <div class="relative max-h-[calc(100vh-230px)] overflow-auto rounded-xl border border-slate-200 bg-white">
-            <table class="min-w-[1500px] text-sm">
+            <table class="min-w-max text-sm">
               <thead class="thead">
                 <tr>
-                  <th class="sticky left-0 top-0 z-30 w-12 border-b border-r border-slate-300 bg-slate-200 px-3 py-2 text-center font-bold text-slate-900">#</th>
-                  <th class="sticky left-12 top-0 z-30 w-56 border-b border-r border-slate-300 bg-slate-200 px-3 py-2 font-bold text-slate-900">Shortcut</th>
-                  <th class="sticky left-[14rem] top-0 z-30 min-w-[240px] border-b border-r border-slate-300 bg-slate-200 px-3 py-2 font-bold text-slate-900">Sản phẩm</th>
-                  <th class="sticky left-[29rem] top-0 z-30 w-20 border-b border-r border-slate-300 bg-slate-200 px-3 py-2 text-center font-bold text-slate-900">ĐVT</th>
-                  <th class="sticky left-[34rem] top-0 z-30 w-28 border-b border-r border-slate-300 bg-slate-200 px-3 py-2 text-right font-bold text-slate-900">Giá</th>
+                  <th class="sticky left-0 top-0 z-30 w-[160px] min-w-[160px] border-b border-r border-slate-300 bg-slate-200 p-2 text-left text-xs font-bold text-slate-900 sm:w-[200px] sm:min-w-[200px]">Sản phẩm / ĐVT</th>
                   <th v-for="(school, schoolIndex) in schools" :key="school.id" class="sticky top-0 z-20 w-28 border-b border-l border-slate-200 bg-slate-100 px-3 py-2 text-center font-bold text-slate-800" :class="schoolIndex === activeFocusCol ? 'bg-emerald-100' : ''">
                     <div class="flex flex-col items-center gap-1">
                       <span>{{ school.code || school.id }}</span>
@@ -308,12 +304,20 @@
               </thead>
               <tbody class="divide-y divide-slate-100">
                 <tr v-for="(row, index) in paginatedRows" :key="row.id" class="align-top transition-colors duration-100 hover:bg-slate-50" :class="index === activeFocusRow ? 'bg-emerald-50/80' : ''">
-                  <td class="sticky left-0 z-10 w-12 border-r border-slate-200 bg-white px-3 py-3 text-center text-slate-400" :class="index === activeFocusRow ? 'bg-emerald-50/80' : ''">
-                    <span v-if="row.isDirty" class="w-1.5 h-1.5 rounded-full bg-amber-500 inline-block animate-pulse mr-1"></span>
-                    {{ (matrixPage - 1) * pageSize + index + 1 }}
-                  </td>
-                  <td class="sticky left-12 z-10 w-56 border-r border-slate-200 bg-white px-3 py-3 relative shadow-[2px_0_5px_-2px_rgba(0,0,0,0.08)]" :class="index === activeFocusRow ? 'bg-emerald-50/80' : ''">
-                    <input v-model="row.searchQuery" @input="onShortcutInput(row)" @focus="lockCell(row, 'shortcut'); openSuggestions(row, $event)" @keydown="onShortcutKeydown($event, row)" @blur="unlockCell(row, 'shortcut'); closeSuggestions(row)" placeholder="tv, cl..." class="input uppercase font-semibold tracking-wide">
+                  <td class="sticky left-0 z-10 w-[160px] min-w-[160px] border-b border-r border-slate-200 bg-white p-2 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.08)] sm:w-[200px] sm:min-w-[200px]" :class="index === activeFocusRow ? 'bg-emerald-50/80' : ''">
+                    <div class="flex min-w-0 flex-col gap-0.5">
+                      <div class="flex min-w-0 items-center gap-1">
+                        <span v-if="row.isDirty" class="h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-amber-500"></span>
+                        <span class="truncate text-xs font-bold leading-tight text-slate-900 sm:text-sm" :title="row.productName || 'Chưa khớp mã'">{{ row.productName || 'Chưa khớp mã' }}</span>
+                      </div>
+                      <div class="flex min-w-0 items-center gap-1.5 text-[10px] font-medium text-slate-500">
+                        <input v-model="row.searchQuery" @input="onShortcutInput(row)" @focus="lockCell(row, 'shortcut'); openSuggestions(row, $event)" @keydown="onShortcutKeydown($event, row)" @blur="unlockCell(row, 'shortcut'); closeSuggestions(row)" placeholder="mã..." class="min-w-0 w-12 rounded border border-slate-200 bg-slate-100 px-1 py-0.5 text-[10px] font-mono font-semibold uppercase text-slate-700 outline-none focus:border-emerald-400 sm:w-16">
+                        <span>·</span>
+                        <span class="truncate font-semibold text-emerald-700">{{ row.unit || '—' }}</span>
+                        <span>·</span>
+                        <span class="shrink-0 text-slate-400">{{ formatCompactPrice(row.price) }}</span>
+                      </div>
+                    </div>
                     <teleport to="body">
                       <div v-if="row.showDropdown && row.suggestions.length" :style="suggestionStyle(row)" class="suggestions absolute z-50 left-0 mt-1 bg-white shadow-2xl border border-slate-200 rounded-xl overflow-y-auto max-h-60 w-[300px] xs:w-[380px] sm:w-[520px] md:w-[650px]">
                         <button v-for="(product, idx) in row.suggestions" :key="product.code" @mousedown.prevent="pickProduct(row, product)" class="suggestion-item grid grid-cols-12 gap-2 items-center px-4 py-2.5 cursor-pointer border-b border-slate-100 hover:bg-emerald-50 transition-colors duration-150 last:border-0" :class="idx === row.suggestIndex ? 'bg-emerald-50' : ''">
@@ -328,12 +332,6 @@
                       </div>
                     </teleport>
                   </td>
-                  <td class="sticky left-[14rem] z-10 min-w-[240px] border-r border-slate-200 bg-white px-3 py-3 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.08)]" :class="index === activeFocusRow ? 'bg-emerald-50/80' : ''">
-                    <div class="font-semibold text-slate-900">{{ row.productName || 'Chưa khớp mã' }}</div>
-                    <div class="text-[11px] text-slate-400">{{ row.productName ? 'Đã map từ danh mục' : 'Chọn mã từ gợi ý' }}</div>
-                  </td>
-                  <td class="sticky left-[29rem] z-10 w-20 border-r border-slate-200 bg-white px-3 py-3 text-center" :class="index === activeFocusRow ? 'bg-emerald-50/80' : ''">{{ row.unit || '-' }}</td>
-                  <td class="sticky left-[34rem] z-10 w-28 border-r border-slate-200 bg-white px-3 py-3 text-right font-semibold shadow-[2px_0_5px_-2px_rgba(0,0,0,0.08)]" :class="index === activeFocusRow ? 'bg-emerald-50/80' : ''">{{ row.price ? money(row.price) : '-' }}</td>
                   <td v-for="(school, schoolIndex) in schools" :key="school.id" class="border-b border-r border-slate-200 p-0 text-center transition-colors duration-100" :class="[(index === activeFocusRow || schoolIndex === activeFocusCol) ? 'bg-emerald-50/80' : '', (index === activeFocusRow && schoolIndex === activeFocusCol) ? 'bg-emerald-100/90' : '']">
                     <button :id="`matrix-cell-${index}-${schoolIndex}`" @click="openBatchPopover(row, school, $event)" @focus="handleCellFocus(index, schoolIndex, $event)" @blur="handleCellBlur" @keydown="handleMatrixKeydown($event, index, schoolIndex)" class="input flex min-h-10 w-full items-center justify-center gap-1 rounded-none border-0 text-center transition-all duration-100" :class="index === activeFocusRow && schoolIndex === activeFocusCol ? 'ring-2 ring-emerald-500 font-bold text-emerald-950 bg-emerald-100 shadow-inner' : 'bg-transparent text-slate-700 hover:bg-slate-50/50'">
                       <span>{{ qty(row.schoolQtys[school.id]) }}</span>
