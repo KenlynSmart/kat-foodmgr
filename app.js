@@ -1,4 +1,4 @@
-const { createApp, ref, computed, watch, onMounted, nextTick } = Vue;
+const { createApp, ref, reactive, computed, watch, onMounted, nextTick } = Vue;
 
 createApp({
   setup() {
@@ -161,7 +161,7 @@ createApp({
     const iosGuideDismissed = ref(false);
     const debugLogs = ref([]);
     const printSchoolId = ref('all');
-    const showUnitPriceInPrint = ref(true);
+    const slipPriceVisibility = reactive({});
     const editingProduct = ref(false);
     const editingSchool = ref(false);
     const productForm = ref({ code: '', name: '', unit: '', price: 0, category_id: '' });
@@ -2759,19 +2759,20 @@ createApp({
 
     function exportCSV() {
       const header = ['STT', 'Mã', 'Tên', 'ĐVT', 'Nhu cầu', 'Tồn kho', 'Thực mua', 'Đơn giá', 'Thành tiền'];
-      const lines = [header.join(',')];
+      const escapeCsvCell = (value) => `"${String(value ?? '').replaceAll('"', '""')}"`;
+      const lines = [header.map(escapeCsvCell).join(',')];
       summaryList.value.forEach((item, index) => {
         lines.push([
           index + 1,
           item.code,
-          `"${item.name.replaceAll('"', '""')}"`,
+          item.name,
           item.unit,
           qty(item.demandQty),
           qty(item.stockQty),
           qty(item.realBuy),
           Math.round(item.price),
           Math.round(item.subTotal)
-        ].join(','));
+        ].map(escapeCsvCell).join(','));
       });
       const blob = new Blob(['\ufeff' + lines.join('\n')], { type: 'text/csv;charset=utf-8;' });
       const link = document.createElement('a');
@@ -2779,6 +2780,14 @@ createApp({
       link.download = `vn-food-${deliveryDate.value}.csv`;
       link.click();
       URL.revokeObjectURL(link.href);
+    }
+
+    function getSlipPriceToggle(slipId) {
+      return slipPriceVisibility[slipId] !== false;
+    }
+
+    function toggleSlipPrice(slipId) {
+      slipPriceVisibility[slipId] = !getSlipPriceToggle(slipId);
     }
 
     async function copyDebugLogs() {
@@ -3018,7 +3027,9 @@ createApp({
       dismissStatusBanner,
       debugLogs,
       printSchoolId,
-      showUnitPriceInPrint,
+      slipPriceVisibility,
+      getSlipPriceToggle,
+      toggleSlipPrice,
       productForm,
       categoryForm,
       isSubmittingCategory,
