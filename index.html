@@ -937,9 +937,22 @@
             <h2 class="section-title">Biên bản giao hàng</h2>
             <p class="section-subtitle">In riêng từng trường hoặc toàn bộ; CSS print đã tách file riêng.</p>
           </div>
-          <div class="flex gap-2">
+          <div class="flex flex-wrap items-center gap-2">
+            <label class="flex cursor-pointer items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm font-semibold text-slate-700 shadow-sm hover:bg-slate-50">
+              <input v-model="showUnitPriceInPrint" type="checkbox" class="h-4 w-4 rounded text-emerald-600 focus:ring-emerald-500">
+              <span>Hiển thị đơn giá &amp; thành tiền</span>
+            </label>
             <button @click="printAllReceipts" class="btn-primary">In tất cả</button>
             <button @click="exportCSV" class="btn-secondary">Xuất CSV</button>
+          </div>
+        </div>
+        <div class="mt-3 flex flex-wrap items-center gap-3 rounded-lg border bg-slate-50 p-2 text-xs font-medium">
+          <span class="font-bold text-slate-700">Tổng nhu cầu theo ĐVT:</span>
+          <div class="flex flex-wrap gap-2">
+            <span v-for="group in totalsByUnit" :key="group.unit" class="rounded border bg-white px-2 py-0.5 shadow-sm">
+              <strong class="text-emerald-700">{{ formatQuantity(group.total) }}</strong> {{ group.unit }}
+            </span>
+            <span v-if="!totalsByUnit.length" class="text-slate-400">Chưa có dữ liệu</span>
           </div>
         </div>
 
@@ -961,24 +974,31 @@
             <div class="p-5">
               <table class="min-w-full text-sm">
                 <thead class="thead">
-                  <tr><th class="th">Mã</th><th class="th">Tên</th><th class="th text-right">SL</th><th class="th text-right">Giá</th><th class="th text-right">Thành tiền</th></tr>
+                  <tr>
+                    <th class="th">Mã</th><th class="th">Tên</th><th class="th text-right">SL</th>
+                    <th v-if="showUnitPriceInPrint" class="th print-price-column text-right">Đơn giá</th>
+                    <th v-if="showUnitPriceInPrint" class="th print-price-column text-right">Thành tiền</th>
+                  </tr>
                 </thead>
                 <tbody class="divide-y divide-slate-100">
                   <tr v-for="item in receipt.items" :key="item.code">
                     <td class="px-3 py-2 font-semibold uppercase">{{ item.code }}</td>
                     <td class="px-3 py-2">{{ item.name }}</td>
-                    <td class="px-3 py-2 text-right">{{ qty(item.qty) }}</td>
-                    <td class="px-3 py-2 text-right">{{ money(item.price) }}</td>
-                    <td class="px-3 py-2 text-right font-semibold">{{ money(item.amount) }}</td>
+                    <td class="px-3 py-2 text-right font-semibold text-slate-800">{{ formatQuantity(item.qty) }} <span class="ml-0.5 text-xs font-normal text-slate-500">{{ item.unit || 'Khác' }}</span></td>
+                    <td v-if="showUnitPriceInPrint" class="print-price-column px-3 py-2 text-right">{{ formatCurrency(item.price) }}</td>
+                    <td v-if="showUnitPriceInPrint" class="print-price-column px-3 py-2 text-right font-semibold">{{ formatCurrency(item.amount) }}</td>
                   </tr>
                   <tr v-if="!receipt.items.length">
-                    <td colspan="5" class="px-3 py-8 text-center text-slate-400 italic">Không có hàng cho trường này.</td>
+                    <td :colspan="showUnitPriceInPrint ? 5 : 3" class="px-3 py-8 text-center italic text-slate-400">Không có hàng cho trường này.</td>
                   </tr>
                 </tbody>
               </table>
-              <div class="mt-4 flex justify-between items-center text-sm font-semibold">
-                <span>Tổng nhu cầu: {{ qty(receipt.totalQty) }}</span>
-                <span>Tổng tiền: {{ money(receipt.totalAmount) }}</span>
+              <div class="mt-3 flex flex-wrap items-center gap-3 rounded-lg border bg-slate-50 p-2 text-xs font-medium">
+                <span class="font-bold text-slate-700">Tổng nhu cầu theo ĐVT:</span>
+                <span v-for="group in receipt.totalsByUnit" :key="group.unit" class="rounded border bg-white px-2 py-0.5 shadow-sm">
+                  <strong class="text-emerald-700">{{ formatQuantity(group.total) }}</strong> {{ group.unit }}
+                </span>
+                <span v-if="showUnitPriceInPrint" class="ml-auto font-semibold text-slate-700">Tổng tiền: {{ formatCurrency(receipt.totalAmount) }}</span>
               </div>
             </div>
           </article>

@@ -161,6 +161,7 @@ createApp({
     const iosGuideDismissed = ref(false);
     const debugLogs = ref([]);
     const printSchoolId = ref('all');
+    const showUnitPriceInPrint = ref(true);
     const editingProduct = ref(false);
     const editingSchool = ref(false);
     const productForm = ref({ code: '', name: '', unit: '', price: 0, category_id: '' });
@@ -903,6 +904,15 @@ createApp({
     watch([productFilter, productCategoryFilter], () => { catalogPage.value = 1; });
     watch(stockFilter, () => { stockPage.value = 1; });
 
+    const summarizeByUnit = (items) => {
+      const summary = {};
+      items.forEach((item) => {
+        const unit = item.unit || 'Khác';
+        summary[unit] = (summary[unit] || 0) + num(item.qty);
+      });
+      return Object.entries(summary).map(([unit, total]) => ({ unit, total }));
+    };
+
     const receipts = computed(() => {
       const buckets = groupOrdersBySchool();
       return schools.value.map((school) => {
@@ -914,10 +924,16 @@ createApp({
           theme: school,
           items,
           totalQty: items.reduce((sum, item) => sum + item.qty, 0),
-          totalAmount: items.reduce((sum, item) => sum + item.amount, 0)
+          totalAmount: items.reduce((sum, item) => sum + item.amount, 0),
+          totalsByUnit: summarizeByUnit(items)
         };
       });
     });
+
+    const activePrintItems = computed(() => receipts.value
+      .filter((receipt) => printSchoolId.value === 'all' || receipt.id === printSchoolId.value)
+      .flatMap((receipt) => receipt.items));
+    const totalsByUnit = computed(() => summarizeByUnit(activePrintItems.value));
 
     function persistLocal() {
       if (!activeVendorId.value) return;
@@ -3002,6 +3018,7 @@ createApp({
       dismissStatusBanner,
       debugLogs,
       printSchoolId,
+      showUnitPriceInPrint,
       productForm,
       categoryForm,
       isSubmittingCategory,
@@ -3021,6 +3038,8 @@ createApp({
       filteredSchools,
       filteredStockProducts,
       receipts: receiptsComputed,
+      activePrintItems,
+      totalsByUnit,
       totalBySchool,
       totalSchoolMoney,
       totalRealCost,
@@ -3028,6 +3047,8 @@ createApp({
       themeStyle,
       money,
       qty,
+      formatQuantity: qty,
+      formatCurrency: money,
       activeEditingCell,
       lockCell,
       unlockCell,
