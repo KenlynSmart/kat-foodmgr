@@ -78,7 +78,7 @@ createApp({
       result[product?.id || key] = num(value);
       return result;
     }, {});
-    const stockValue = (product) => num(stockMap.value[product?.id]);
+    const baseStockValue = (product) => num(stockMap.value[product?.id]);
 
     const currentTab = ref('matrix');
     const rows = ref(state.rows);
@@ -96,9 +96,12 @@ createApp({
     const schoolFilter = ref('');
     const stockFilter = ref('');
     const matrixPage = ref(1);
+    const sortByCol = ref(null);
+    const sortDirection = ref(null);
     const activeFocusRow = ref(null);
     const activeFocusCol = ref(null);
     const stockPage = ref(1);
+    const stockSortDirection = ref('desc');
     const catalogPage = ref(1);
     const pageSize = 25;
     const syncStatus = ref('Đang tải');
@@ -622,6 +625,29 @@ createApp({
       batchPopover.value.open = false;
     }
 
+    function toggleMatrixSort(column) {
+      if (sortByCol.value !== column) {
+        sortByCol.value = column;
+        sortDirection.value = 'asc';
+      } else if (sortDirection.value === 'asc') {
+        sortDirection.value = 'desc';
+      } else {
+        sortByCol.value = null;
+        sortDirection.value = null;
+      }
+      matrixPage.value = 1;
+    }
+
+    function matrixSortIcon(column) {
+      if (sortByCol.value !== column || !sortDirection.value) return 'fa-sort';
+      return sortDirection.value === 'asc' ? 'fa-sort-up' : 'fa-sort-down';
+    }
+
+    function toggleStockSort() {
+      stockSortDirection.value = stockSortDirection.value === 'desc' ? 'asc' : 'desc';
+      stockPage.value = 1;
+    }
+
     function activeBatchRow() {
       return rows.value.find((row) => row.id === batchPopover.value.rowId);
     }
@@ -823,7 +849,7 @@ createApp({
       });
       return Object.values(map)
         .map((item) => {
-          const stockQty = num(stockMap.value[item.id]);
+          const stockQty = stockValue({ id: item.id });
           const realBuy = Math.max(0, round3(item.demandQty - stockQty));
           return { ...item, stockQty, realBuy, subTotal: Math.round(realBuy * item.price) };
         })
@@ -856,7 +882,16 @@ createApp({
     const categoryProductCount = (categoryId) => products.value.filter((product) => String(product.category_id || '') === String(categoryId)).length;
     const pageCount = (items) => Math.max(1, Math.ceil(items.length / pageSize));
     const pageItems = (items, page) => items.slice((page - 1) * pageSize, page * pageSize);
-    const paginatedRows = computed(() => pageItems(rows.value, matrixPage.value));
+    const sortedRows = computed(() => {
+      if (!sortByCol.value || !sortDirection.value) return rows.value;
+      const direction = sortDirection.value === 'asc' ? 1 : -1;
+      return rows.value.slice().sort((left, right) => {
+        const leftValue = sortByCol.value === 'totalQty' ? num(left.totalQty) : num(left.subTotal);
+        const rightValue = sortByCol.value === 'totalQty' ? num(right.totalQty) : num(right.subTotal);
+        return (leftValue - rightValue) * direction || norm(left.productName).localeCompare(norm(right.productName));
+      });
+    });
+    const paginatedRows = computed(() => pageItems(sortedRows.value, matrixPage.value));
     const paginatedProducts = computed(() => pageItems(filteredProducts.value, catalogPage.value));
     const paginatedStockProducts = computed(() => pageItems(filteredStockProducts.value, stockPage.value));
     const matrixPageCount = computed(() => pageCount(rows.value));
@@ -898,11 +933,34 @@ createApp({
 
     const filteredStockProducts = computed(() => {
       const q = norm(stockFilter.value);
-      return !q ? products.value : products.value.filter((item) => norm(item.code).includes(q) || norm(item.name).includes(q));
+      const filtered = !q ? products.value : products.value.filter((item) => norm(item.code).includes(q) || norm(item.name).includes(q));
+      const direction = stockSortDirection.value === 'asc' ? 1 : -1;
+      return filtered.slice().sort((left, right) =>
+        (stockValue(left) - stockValue(right)) * direction || norm(left.code).localeCompare(norm(right.code))
+      );
     });
+
+    const returnedStockByProduct = computed(() => {
+      const totals = {};
+      rows.value.forEach((row) => {
+        const product = resolveProduct(row.productId || row.shortcut);
+        if (!product) return;
+        Object.values(row.schoolBatches || {}).flat().forEach((batch) => {
+          if (!norm(batch.note).includes('trả hàng')) return;
+          const key = productKey(product);
+          totals[key] = round3((totals[key] || 0) + Math.abs(num(batch.qty_change)));
+        });
+      });
+      return totals;
+    });
+
+    const stockValue = (product) => baseStockValue(product) + num(returnedStockByProduct.value[product?.id || product?.code]);
 
     watch([productFilter, productCategoryFilter], () => { catalogPage.value = 1; });
     watch(stockFilter, () => { stockPage.value = 1; });
+    watch(currentTab, (newTab) => {
+      if (newTab !== 'matrix') closeBatchPopover();
+    });
 
     const summarizeByUnit = (items) => {
       const summary = {};
@@ -2092,8 +2150,18 @@ createApp({
       if (!code) return;
       const product = resolveProduct(code);
       if (!product) return;
-      stockMap.value = { ...stockMap.value, [product.id]: num(stockForm.value.qty) };
+      saveAvailableStock(product, stockForm.value.qty);
       stockForm.value = { product_code: '', qty: 0 };
+      scheduleSync();
+    }
+
+    function saveAvailableStock(product, value) {
+      if (!product?.id) return;
+      const returnedQty = num(returnedStockByProduct.value[product.id]);
+      stockMap.value = {
+        ...stockMap.value,
+        [product.id]: Math.max(0, round3(num(value) - returnedQty))
+      };
       scheduleSync();
     }
 
@@ -2101,7 +2169,8 @@ createApp({
       if (!product?.id) return;
       const nextQty = Math.max(0, round3(stockValue(product) + delta));
       skipNextSync = true;
-      stockMap.value = { ...stockMap.value, [product.id]: nextQty };
+      const returnedQty = num(returnedStockByProduct.value[product.id]);
+      stockMap.value = { ...stockMap.value, [product.id]: Math.max(0, round3(nextQty - returnedQty)) };
       persistLocal();
       addToast(`Đã cập nhật tồn kho ${product.code} ở local; bấm Đồng bộ thủ công để lưu cloud`, 'info');
     }
@@ -2904,6 +2973,14 @@ createApp({
           addRow();
         }
       });
+      document.addEventListener('click', (event) => {
+        if (!batchPopover.value.open) return;
+        const target = event.target;
+        if (!(target instanceof Element)) return;
+        if (!target.closest('[data-batch-popover]') && !target.closest('[data-batch-trigger]')) {
+          closeBatchPopover();
+        }
+      });
       window.addEventListener('offline', () => {
           setStatus('Offline', 'Local cache', 'Đang offline; dữ liệu được giữ ở local.');
           addToast('Mất kết nối mạng', 'warn');
@@ -2949,7 +3026,13 @@ createApp({
       handleCellFocus,
       handleCellBlur,
       handleMatrixKeydown,
+      sortByCol,
+      sortDirection,
+      toggleMatrixSort,
+      matrixSortIcon,
       stockPage,
+      stockSortDirection,
+      toggleStockSort,
       catalogPage,
       matrixPageCount,
       stockPageCount,
@@ -3041,6 +3124,7 @@ createApp({
       categoryDraftName,
       schoolForm,
       stockForm,
+      stockValue,
       editingProduct,
       editingSchool,
       iconOptions,
@@ -3048,6 +3132,7 @@ createApp({
       filteredProducts,
       filteredSchools,
       filteredStockProducts,
+      returnedStockByProduct,
       receipts: receiptsComputed,
       activePrintItems,
       totalsByUnit,
@@ -3106,6 +3191,7 @@ createApp({
       addDefaultSchool,
       applySchoolTheme,
       saveStock,
+      saveAvailableStock,
       adjustStock,
       exportCSV,
       copyDebugLogs,

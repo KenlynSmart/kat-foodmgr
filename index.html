@@ -297,9 +297,16 @@
                       </button>
                     </div>
                   </th>
-                  <th class="th w-28 text-center">Tổng nhu cầu</th>
-                  <th class="th w-32 text-right">Thành tiền</th>
-                  <th class="th w-12"></th>
+                  <th class="sticky right-36 top-0 z-20 w-36 border-b border-l border-slate-200 bg-slate-100 px-3 py-2 text-center shadow-[-2px_0_5px_-2px_rgba(0,0,0,0.08)]">
+                    <button @click="toggleMatrixSort('totalQty')" class="inline-flex items-center gap-1 font-bold text-slate-800 hover:text-emerald-700">
+                      Tổng nhu cầu <i class="fa-solid text-xs" :class="matrixSortIcon('totalQty')"></i>
+                    </button>
+                  </th>
+                  <th class="sticky right-0 top-0 z-20 w-36 border-b border-l border-slate-200 bg-slate-100 px-3 py-2 text-right shadow-[-2px_0_5px_-2px_rgba(0,0,0,0.08)]">
+                    <button @click="toggleMatrixSort('subTotal')" class="inline-flex items-center gap-1 font-bold text-slate-800 hover:text-emerald-700">
+                      Thành tiền <i class="fa-solid text-xs" :class="matrixSortIcon('subTotal')"></i>
+                    </button>
+                  </th>
                 </tr>
               </thead>
               <tbody class="divide-y divide-slate-100">
@@ -333,27 +340,29 @@
                     </teleport>
                   </td>
                   <td v-for="(school, schoolIndex) in schools" :key="school.id" class="border-b border-r border-slate-200 p-0 text-center transition-colors duration-100" :class="[(index === activeFocusRow || schoolIndex === activeFocusCol) ? 'bg-emerald-50/80' : '', (index === activeFocusRow && schoolIndex === activeFocusCol) ? 'bg-emerald-100/90' : '']">
-                    <button :id="`matrix-cell-${index}-${schoolIndex}`" @click="openBatchPopover(row, school, $event)" @focus="handleCellFocus(index, schoolIndex, $event)" @blur="handleCellBlur" @keydown="handleMatrixKeydown($event, index, schoolIndex)" class="input flex min-h-10 w-full items-center justify-center gap-1 rounded-none border-0 text-center transition-all duration-100" :class="index === activeFocusRow && schoolIndex === activeFocusCol ? 'ring-2 ring-emerald-500 font-bold text-emerald-950 bg-emerald-100 shadow-inner' : 'bg-transparent text-slate-700 hover:bg-slate-50/50'">
+                    <button :id="`matrix-cell-${index}-${schoolIndex}`" data-batch-trigger @click="openBatchPopover(row, school, $event)" @focus="handleCellFocus(index, schoolIndex, $event)" @blur="handleCellBlur" @keydown="handleMatrixKeydown($event, index, schoolIndex)" class="input flex min-h-10 w-full items-center justify-center gap-1 rounded-none border-0 text-center transition-all duration-100" :class="index === activeFocusRow && schoolIndex === activeFocusCol ? 'ring-2 ring-emerald-500 font-bold text-emerald-950 bg-emerald-100 shadow-inner' : 'bg-transparent text-slate-700 hover:bg-slate-50/50'">
                       <span>{{ qty(row.schoolQtys[school.id]) }}</span>
                       <span v-if="row.schoolBatches?.[school.id]?.length > 1" class="rounded-full bg-emerald-100 px-1 text-[10px] font-bold text-emerald-700">
                         • {{ row.schoolBatches[school.id].length }}đ
                       </span>
                     </button>
                   </td>
-                  <td class="border-b border-slate-200 px-3 py-3 text-center font-bold text-emerald-700" :class="index === activeFocusRow ? 'bg-emerald-50/80' : ''">{{ qty(row.totalQty) }}</td>
-                  <td class="border-b border-slate-200 px-3 py-3 text-right font-extrabold" :class="index === activeFocusRow ? 'bg-emerald-50/80' : ''">{{ money(row.subTotal) }}</td>
-                  <td class="border-b border-slate-200 px-3 py-3 text-center" :class="index === activeFocusRow ? 'bg-emerald-50/80' : ''">
-                    <button @click="removeRow(row.id)" class="text-rose-500 hover:text-rose-700"><i class="fa-regular fa-trash-can"></i></button>
+                  <td class="sticky right-36 z-10 w-36 border-b border-l border-slate-200 bg-white px-3 py-3 text-center font-bold text-emerald-700 shadow-[-2px_0_5px_-2px_rgba(0,0,0,0.08)]" :class="index === activeFocusRow ? 'bg-emerald-50/80' : ''">{{ qty(row.totalQty) }}</td>
+                  <td class="sticky right-0 z-10 w-36 border-b border-l border-slate-200 bg-white px-3 py-3 text-right font-extrabold shadow-[-2px_0_5px_-2px_rgba(0,0,0,0.08)]" :class="index === activeFocusRow ? 'bg-emerald-50/80' : ''">
+                    <div class="flex items-center justify-end gap-2">
+                      <span>{{ money(row.subTotal) }}</span>
+                      <button @click="removeRow(row.id)" class="text-rose-500 hover:text-rose-700" aria-label="Xóa dòng"><i class="fa-regular fa-trash-can"></i></button>
+                    </div>
                   </td>
                 </tr>
                 <tr v-if="!rows.length">
-                  <td :colspan="9 + schools.length" class="px-6 py-12 text-center text-slate-400 italic">Chưa có dòng nào.</td>
+                  <td :colspan="3 + schools.length" class="px-6 py-12 text-center text-slate-400 italic">Chưa có dòng nào.</td>
                 </tr>
               </tbody>
             </table>
           </div>
           <teleport to="body">
-            <div v-if="batchPopover.open" :style="batchPopover.position" class="absolute z-50 w-64 rounded-lg border border-slate-200 bg-white p-3 shadow-xl">
+            <div v-if="batchPopover.open" data-batch-popover :style="batchPopover.position" class="absolute z-50 w-64 rounded-lg border border-slate-200 bg-white p-3 shadow-xl" @click.stop>
               <div class="mb-2 flex items-center justify-between">
                 <span class="text-xs font-bold uppercase text-slate-500">Lịch sử các đợt</span>
                 <button @click="closeBatchPopover" class="text-slate-400 hover:text-slate-700" aria-label="Đóng">
@@ -895,7 +904,11 @@
                 <th class="th">Mã</th>
                 <th class="th">Tên sản phẩm</th>
                 <th class="th text-center w-24">ĐVT</th>
-                <th class="th text-right w-80">Tồn kho khả dụng</th>
+                <th class="th w-80 text-right">
+                  <button @click="toggleStockSort" class="inline-flex items-center gap-1 font-bold hover:text-emerald-700">
+                    Tồn kho khả dụng <i class="fa-solid text-xs" :class="stockSortDirection === 'asc' ? 'fa-sort-up' : 'fa-sort-down'"></i>
+                  </button>
+                </th>
                 <th class="th text-center w-28">Trạng thái</th>
               </tr>
             </thead>
@@ -909,13 +922,13 @@
                   <div class="flex items-center justify-end gap-2">
                     <button @click="adjustStock(product, -1)" class="min-w-[2.5rem] h-10 rounded-full border border-slate-300 bg-slate-100 font-bold text-slate-700 hover:bg-slate-200 active:bg-slate-300 flex items-center justify-center transition">-1</button>
                     <button @click="adjustStock(product, -0.1)" class="min-w-[2.5rem] h-10 rounded-full border border-slate-300 bg-slate-100 font-bold text-slate-700 hover:bg-slate-200 active:bg-slate-300 flex items-center justify-center transition text-xs">-0.1</button>
-                    <input type="number" min="0" step="any" v-model.number="stockMap[product.id]" @focus="setActiveEditingCell(`stock:${product.id}`, 'qty')" @blur="clearActiveEditingCell(); scheduleSync()" @change="scheduleSync" class="input w-24 text-right px-2">
+                    <input type="number" min="0" step="any" :value="stockValue(product)" @focus="setActiveEditingCell(`stock:${product.id}`, 'qty')" @blur="clearActiveEditingCell(); scheduleSync()" @change="saveAvailableStock(product, $event.target.value)" class="input w-24 text-right px-2">
                     <button @click="adjustStock(product, 0.1)" class="min-w-[2.5rem] h-10 rounded-full border border-slate-300 bg-slate-100 font-bold text-slate-700 hover:bg-slate-200 active:bg-slate-300 flex items-center justify-center transition text-xs">+0.1</button>
                     <button @click="adjustStock(product, 1)" class="min-w-[2.5rem] h-10 rounded-full border border-slate-300 bg-slate-100 font-bold text-slate-700 hover:bg-slate-200 active:bg-slate-300 flex items-center justify-center transition">+1</button>
                   </div>
                 </td>
                 <td class="px-3 py-3 text-center">
-                  <span v-if="num(stockMap[product.id]) === 0" class="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2.5 py-1 text-xs font-bold text-amber-800 border border-amber-200"><i class="fa-solid fa-triangle-exclamation"></i> Hết kho</span>
+                  <span v-if="stockValue(product) === 0" class="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2.5 py-1 text-xs font-bold text-amber-800 border border-amber-200"><i class="fa-solid fa-triangle-exclamation"></i> Hết kho</span>
                   <span v-else class="text-emerald-600 text-xs font-semibold">Có hàng</span>
                 </td>
               </tr>
