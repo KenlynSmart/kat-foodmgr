@@ -206,6 +206,29 @@
               Đổi mật khẩu
             </button>
           </form>
+          <form v-if="!isAdmin && canManageCatalog" @submit.prevent="saveVendorProfile" class="rounded-2xl border border-emerald-200 bg-emerald-50 p-4 md:col-span-2">
+            <div class="flex items-center justify-between gap-3">
+              <div>
+                <h3 class="font-bold text-slate-800">Hồ sơ nhà cung cấp</h3>
+                <p class="text-xs text-slate-500">Thông tin tự động điền trên Phiếu xuất hàng.</p>
+              </div>
+              <span v-if="vendorProfileLoading" class="text-xs text-slate-500"><i class="fa-solid fa-spinner fa-spin"></i></span>
+            </div>
+            <div class="mt-3 grid gap-3 md:grid-cols-2">
+              <input v-model="vendorProfileForm.company_full_name" class="input md:col-span-2" placeholder="Tên công ty pháp lý">
+              <textarea v-model="vendorProfileForm.address" class="input md:col-span-2" rows="2" placeholder="Địa chỉ kho/chi nhánh"></textarea>
+              <input v-model="vendorProfileForm.hotline" class="input" placeholder="Hotline">
+              <input v-model="vendorProfileForm.tax_code" class="input" placeholder="Mã số thuế">
+              <input v-model="vendorProfileForm.default_creator_name" class="input" placeholder="Người lập phiếu mặc định">
+              <label class="flex items-center gap-2 rounded-xl border border-emerald-200 bg-white px-3 py-2 text-sm font-semibold text-slate-600">
+                <input v-model="vendorProfileForm.print_show_price_default" type="checkbox" class="h-4 w-4 rounded text-emerald-600">
+                Hiện giá mặc định
+              </label>
+            </div>
+            <button type="submit" class="btn-primary mt-3 w-full justify-center" :disabled="vendorProfileSaving || vendorProfileLoading">
+              {{ vendorProfileSaving ? 'Đang lưu...' : 'Lưu hồ sơ nhà cung cấp' }}
+            </button>
+          </form>
           <form v-if="!isAdmin && currentUser?.vendor_id" @submit.prevent="redeemSubscriptionCode" class="rounded-2xl border border-amber-200 bg-amber-50 p-4 md:col-span-2">
             <h3 class="font-bold text-amber-950">Gia Hạn Hệ Thống</h3>
             <p class="mt-1 text-sm text-amber-800">Nhập mã 30 ký tự do quản trị viên cấp để cộng thêm thời hạn sử dụng.</p>
@@ -668,9 +691,18 @@
               <button @click="addDefaultSchool" class="btn-secondary">Thêm trường mẫu</button>
             </div>
           </div>
-          <div class="grid sm:grid-cols-3 gap-2">
+          <div class="grid gap-2 sm:grid-cols-3">
             <input v-model="schoolForm.id" :disabled="editingSchool" class="input" placeholder="code">
             <input v-model="schoolForm.name" class="input" placeholder="name">
+            <input v-model="schoolForm.school_code" class="input uppercase" placeholder="Mã ngắn in phiếu (DLH, MIT)">
+            <input v-model="schoolForm.full_name" class="input sm:col-span-2" placeholder="Tên đầy đủ trên phiếu">
+            <input v-model="schoolForm.address" class="input sm:col-span-2" placeholder="Địa chỉ giao hàng">
+            <input v-model="schoolForm.contact_phone" class="input" placeholder="SĐT liên hệ">
+            <input v-model="schoolForm.default_receiver_name" class="input" placeholder="Người nhận mặc định">
+            <label class="flex items-center gap-2 rounded-xl border px-3 py-2 text-sm font-semibold text-slate-600">
+              <input v-model="schoolForm.has_teacher_order" type="checkbox" class="h-4 w-4 rounded text-emerald-600">
+              Tách đơn giáo viên
+            </label>
             <select v-model="schoolForm.theme" @change="applySchoolTheme(schoolForm.theme)" class="input">
               <option v-for="theme in themes" :key="theme.bg_color" :value="theme.bg_color">{{ theme.label }}</option>
             </select>
@@ -725,10 +757,19 @@
               <option value="active">active</option>
               <option value="locked">locked</option>
             </select>
+            <input v-model="vendorForm.company_full_name" class="input md:col-span-2" placeholder="Tên pháp lý trên phiếu">
+            <input v-model="vendorForm.address" class="input md:col-span-2" placeholder="Địa chỉ kho/chi nhánh">
+            <input v-model="vendorForm.hotline" class="input" placeholder="Hotline">
+            <input v-model="vendorForm.tax_code" class="input" placeholder="Mã số thuế">
+            <input v-model="vendorForm.default_creator_name" class="input" placeholder="Người lập phiếu mặc định">
+            <label class="flex items-center gap-2 rounded-xl border border-violet-200 bg-white px-3 py-2 text-sm font-semibold text-slate-600">
+              <input v-model="vendorForm.print_show_price_default" type="checkbox" class="h-4 w-4 rounded text-emerald-600">
+              Hiện giá mặc định
+            </label>
             <button @click="saveVendor" class="btn-primary justify-center" :disabled="vendorSaving">
               {{ vendorSaving ? 'Đang lưu...' : editingVendorId ? 'Lưu vendor' : 'Tạo vendor' }}
             </button>
-            <button v-if="editingVendorId" @click="editingVendorId = ''; vendorForm = { code: '', name: '', status: 'active' }" type="button" class="btn-secondary justify-center">Hủy sửa</button>
+            <button v-if="editingVendorId" @click="editingVendorId = ''; vendorForm = createDefaultVendorForm()" type="button" class="btn-secondary justify-center">Hủy sửa</button>
           </div>
           <div v-if="isAdmin" class="flex flex-col gap-2 md:flex-row md:items-center">
             <label class="text-sm font-semibold text-slate-600">Vendor đang quản lý</label>
@@ -1093,15 +1134,11 @@
         <div class="grid gap-6">
           <article v-for="receipt in receipts" :key="receipt.id"
             :id="`print-receipt-container-${receipt.id}`"
-            class="print-sheet print-card bg-white rounded-3xl border border-slate-200 shadow-sm overflow-hidden"
+            class="print-sheet print-card mx-auto w-full max-w-[800px] bg-white font-serif leading-relaxed rounded-3xl border border-slate-200 shadow-sm overflow-hidden"
             :class="printSchoolId !== 'all' && printSchoolId !== receipt.id ? 'print-hidden' : ''">
-            <div class="p-5 flex flex-wrap items-center justify-between gap-3" :style="themeStyle(receipt.theme)">
-              <div>
-                <div class="text-xs uppercase font-bold opacity-80">Biên bản giao hàng</div>
-                <h3 class="text-xl font-extrabold">{{ receipt.name }}</h3>
-                <div class="text-sm opacity-90">Ngày giao: {{ deliveryDate }}</div>
-              </div>
-              <div class="flex flex-wrap items-center gap-2 no-print">
+            <div class="no-print flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 bg-slate-50 px-4 py-2">
+              <span class="text-xs font-bold text-slate-700">Phiếu: {{ receipt.school.full_name || receipt.name }}</span>
+              <div class="flex flex-wrap items-center gap-2">
                 <label class="flex cursor-pointer items-center gap-1.5 rounded border bg-white px-2.5 py-1 text-xs font-semibold text-slate-600 shadow-sm hover:bg-slate-50">
                   <input type="checkbox" :checked="getSlipPriceToggle(receipt.id)" @change="toggleSlipPrice(receipt.id)" class="h-3.5 w-3.5 rounded text-emerald-600">
                   <span>Hiện đơn giá</span>
@@ -1109,34 +1146,100 @@
                 <button @click="printSchool(receipt.id)" class="btn-secondary bg-white">In trường này</button>
               </div>
             </div>
-            <div class="p-5">
-              <table class="min-w-full text-sm">
-                <thead class="thead">
-                  <tr>
-                    <th class="th">Mã</th><th class="th">Tên</th><th class="th text-right">SL</th>
-                    <th v-if="getSlipPriceToggle(receipt.id)" class="th print-price-column text-right">Đơn giá</th>
-                    <th v-if="getSlipPriceToggle(receipt.id)" class="th print-price-column text-right">Thành tiền</th>
+            <div class="p-6 print:p-0">
+              <div class="mb-4 flex items-start justify-between border-b-2 border-slate-900 pb-3">
+                <div>
+                  <h2 class="text-sm font-bold uppercase tracking-wide text-slate-900">{{ currentVendor.company_full_name }}</h2>
+                  <p class="mt-0.5 text-xs text-slate-700">{{ currentVendor.address }}</p>
+                  <p class="mt-0.5 text-xs font-semibold text-slate-800">HOTLINE: {{ currentVendor.hotline }}</p>
+                  <p v-if="currentVendor.tax_code" class="mt-0.5 text-xs text-slate-700">MST: {{ currentVendor.tax_code }}</p>
+                </div>
+              </div>
+
+              <div class="my-4 text-center">
+                <h1 class="text-xl font-bold uppercase tracking-wider text-slate-900">PHIẾU XUẤT HÀNG</h1>
+                <p class="mt-1 text-xs italic text-slate-700">{{ formattedPrintDate() }}</p>
+                <p class="mt-0.5 font-mono text-xs font-semibold text-slate-600">Số: {{ slipNumber(receipt) }}</p>
+              </div>
+
+              <div class="mb-4 space-y-1 text-xs">
+                <div class="flex"><span class="w-24 font-bold">Tên đơn vị:</span><span class="font-bold uppercase text-slate-900">{{ receipt.school.full_name || receipt.name }}</span></div>
+                <div class="flex"><span class="w-24 font-bold">Địa chỉ:</span><span>{{ receipt.school.address || 'Đà Nẵng' }}</span></div>
+              </div>
+
+              <table class="w-full border-collapse border border-slate-900 text-xs">
+                <thead>
+                  <tr class="border-b border-slate-900 bg-slate-100 text-center font-bold uppercase text-slate-900">
+                    <th class="w-10 border border-slate-900 p-1.5">STT</th>
+                    <th class="border border-slate-900 p-1.5 text-left">Tên hàng hóa</th>
+                    <th class="w-16 border border-slate-900 p-1.5">Mã số</th>
+                    <th class="w-16 border border-slate-900 p-1.5">ĐVT</th>
+                    <th class="w-20 border border-slate-900 p-1.5">Số lượng</th>
+                    <th v-if="getSlipPriceToggle(receipt.id)" class="w-24 border border-slate-900 p-1.5 text-right">Đơn giá</th>
+                    <th v-if="getSlipPriceToggle(receipt.id)" class="w-28 border border-slate-900 p-1.5 text-right">Thành tiền</th>
                   </tr>
                 </thead>
-                <tbody class="divide-y divide-slate-100">
-                  <tr v-for="item in receipt.items" :key="item.code">
-                    <td class="px-3 py-2 font-semibold uppercase">{{ item.code }}</td>
-                    <td class="px-3 py-2">{{ item.name }}</td>
-                    <td class="px-3 py-2 text-right font-semibold text-slate-800">{{ formatQuantity(item.qty) }} <span class="ml-0.5 text-xs font-normal text-slate-500">{{ item.unit || 'Khác' }}</span></td>
-                    <td v-if="getSlipPriceToggle(receipt.id)" class="print-price-column px-3 py-2 text-right">{{ formatCurrency(item.price) }}</td>
-                    <td v-if="getSlipPriceToggle(receipt.id)" class="print-price-column px-3 py-2 text-right font-semibold">{{ formatCurrency(item.amount) }}</td>
+                <tbody>
+                  <tr v-if="receipt.childrenItems.length" class="bg-slate-50 font-bold italic">
+                    <td :colspan="getSlipPriceToggle(receipt.id) ? 7 : 5" class="border border-slate-900 px-2 py-1 text-slate-800">ĐƠN HÀNG CHO TRẺ</td>
+                  </tr>
+                  <tr v-for="(item, index) in receipt.childrenItems" :key="`child-${receipt.id}-${item.code}`">
+                    <td class="border border-slate-900 p-1 text-center">{{ index + 1 }}</td>
+                    <td class="border border-slate-900 p-1 font-medium">{{ item.name }}</td>
+                    <td class="border border-slate-900 p-1 text-center font-mono text-[11px]">{{ item.code }}</td>
+                    <td class="border border-slate-900 p-1 text-center">{{ item.unit || 'Khác' }}</td>
+                    <td class="border border-slate-900 p-1 text-center font-bold">{{ formatQuantity(item.qty) }}</td>
+                    <td v-if="getSlipPriceToggle(receipt.id)" class="border border-slate-900 p-1 text-right">{{ formatCurrency(item.price) }}</td>
+                    <td v-if="getSlipPriceToggle(receipt.id)" class="border border-slate-900 p-1 text-right font-semibold">{{ formatCurrency(item.amount) }}</td>
+                  </tr>
+                  <tr v-if="receipt.school.has_teacher_order && receipt.teacherItems.length" class="bg-slate-50 font-bold italic">
+                    <td :colspan="getSlipPriceToggle(receipt.id) ? 7 : 5" class="border border-slate-900 px-2 py-1 text-slate-800">ĐƠN HÀNG GIÁO VIÊN</td>
+                  </tr>
+                  <tr v-for="(item, index) in receipt.teacherItems" :key="`teacher-${receipt.id}-${item.code}`">
+                    <td class="border border-slate-900 p-1 text-center">{{ index + 1 }}</td>
+                    <td class="border border-slate-900 p-1 font-medium">{{ item.name }}</td>
+                    <td class="border border-slate-900 p-1 text-center font-mono text-[11px]">{{ item.code }}</td>
+                    <td class="border border-slate-900 p-1 text-center">{{ item.unit || 'Khác' }}</td>
+                    <td class="border border-slate-900 p-1 text-center font-bold">{{ formatQuantity(item.qty) }}</td>
+                    <td v-if="getSlipPriceToggle(receipt.id)" class="border border-slate-900 p-1 text-right">{{ formatCurrency(item.price) }}</td>
+                    <td v-if="getSlipPriceToggle(receipt.id)" class="border border-slate-900 p-1 text-right font-semibold">{{ formatCurrency(item.amount) }}</td>
                   </tr>
                   <tr v-if="!receipt.items.length">
-                    <td :colspan="getSlipPriceToggle(receipt.id) ? 5 : 3" class="px-3 py-8 text-center italic text-slate-400">Không có hàng cho trường này.</td>
+                    <td :colspan="getSlipPriceToggle(receipt.id) ? 7 : 5" class="border border-slate-900 px-2 py-8 text-center italic text-slate-400">Không có hàng cho trường này.</td>
+                  </tr>
+                  <tr class="bg-slate-100 font-bold">
+                    <td colspan="4" class="border border-slate-900 p-1.5 text-center">*** CỘNG</td>
+                    <td class="border border-slate-900 p-1.5 text-center">{{ formatQuantity(receipt.totalQty) }}</td>
+                    <td v-if="getSlipPriceToggle(receipt.id)" class="border border-slate-900 p-1.5 text-right">x</td>
+                    <td v-if="getSlipPriceToggle(receipt.id)" class="border border-slate-900 p-1.5 text-right text-sm">{{ formatCurrency(receipt.totalAmount) }}</td>
                   </tr>
                 </tbody>
               </table>
-              <div class="mt-3 flex flex-wrap items-center gap-3 rounded-lg border bg-slate-50 p-2 text-xs font-medium">
-                <span class="font-bold text-slate-700">Tổng nhu cầu theo ĐVT:</span>
-                <span v-for="group in receipt.totalsByUnit" :key="group.unit" class="rounded border bg-white px-2 py-0.5 shadow-sm">
-                  <strong class="text-emerald-700">{{ formatQuantity(group.total) }}</strong> {{ group.unit }}
-                </span>
-                <span v-if="getSlipPriceToggle(receipt.id)" class="ml-auto font-semibold text-slate-700">Tổng tiền: {{ formatCurrency(receipt.totalAmount) }}</span>
+
+              <div v-if="getSlipPriceToggle(receipt.id)" class="mb-6 mt-3 space-y-1 text-xs">
+                <p><span class="font-bold">Tổng số tiền bằng chữ:</span> <span class="font-medium italic text-slate-800">{{ totalAmountInWords(receipt) }}</span></p>
+                <p><span class="font-bold">Số chứng từ kèm theo:</span> <span>...........................................................................................................</span></p>
+              </div>
+
+              <div class="mt-6 grid grid-cols-3 gap-2 text-center text-xs">
+                <div>
+                  <p class="font-bold uppercase">NGƯỜI LẬP PHIẾU</p>
+                  <p class="text-[10px] italic text-slate-500">(Ký, họ tên)</p>
+                  <div class="h-16"></div>
+                  <p class="font-semibold text-slate-800">{{ currentVendor.default_creator_name || 'NV Kho' }}</p>
+                </div>
+                <div>
+                  <p class="font-bold uppercase">NGƯỜI GIAO HÀNG</p>
+                  <p class="text-[10px] italic text-slate-500">(Ký, họ tên)</p>
+                  <div class="h-16"></div>
+                  <p class="font-semibold text-slate-800">....................................</p>
+                </div>
+                <div>
+                  <p class="font-bold uppercase">NGƯỜI NHẬN HÀNG</p>
+                  <p class="text-[10px] italic text-slate-500">(Ký, họ tên)</p>
+                  <div class="h-16"></div>
+                  <p class="font-semibold text-slate-800">{{ receipt.school.default_receiver_name || 'Đại diện Bếp' }}</p>
+                </div>
               </div>
             </div>
           </article>

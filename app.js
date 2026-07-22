@@ -29,6 +29,56 @@ createApp({
     };
     const qty = (value) => new Intl.NumberFormat('vi-VN', { maximumFractionDigits: 3 }).format(round3(value));
     const nowText = () => new Date().toLocaleString('vi-VN');
+    const vietnameseDigits = ['không', 'một', 'hai', 'ba', 'bốn', 'năm', 'sáu', 'bảy', 'tám', 'chín'];
+
+    function readVietnameseTriplet(value, useFullHundreds) {
+      const hundreds = Math.floor(value / 100);
+      const tens = Math.floor((value % 100) / 10);
+      const units = value % 10;
+      const words = [];
+      if (hundreds || useFullHundreds) {
+        words.push(`${vietnameseDigits[hundreds]} trăm`);
+        if (!tens && units) words.push('lẻ');
+      }
+      if (tens > 1) {
+        words.push(vietnameseDigits[tens]);
+        if (units === 1) words.push('mốt');
+        else if (units === 4) words.push('tư');
+        else if (units === 5) words.push('lăm');
+        else if (units) words.push(vietnameseDigits[units]);
+      } else if (tens === 1) {
+        words.push('mười');
+        if (units === 5) words.push('lăm');
+        else if (units) words.push(vietnameseDigits[units]);
+      } else if (units) {
+        words.push(vietnameseDigits[units]);
+      }
+      return words.join(' ');
+    }
+
+    function numberToVietnameseWords(amount) {
+      const integer = Math.round(num(amount));
+      if (integer === 0) return 'Không đồng';
+      if (integer < 0) return `Âm ${numberToVietnameseWords(Math.abs(integer)).toLowerCase()}`;
+      const scales = ['', 'nghìn', 'triệu', 'tỷ', 'nghìn tỷ', 'triệu tỷ'];
+      const groups = [];
+      let remaining = integer;
+      while (remaining > 0) {
+        groups.push(remaining % 1000);
+        remaining = Math.floor(remaining / 1000);
+      }
+      const words = [];
+      for (let index = groups.length - 1; index >= 0; index -= 1) {
+        const group = groups[index];
+        if (!group) continue;
+        const useFullHundreds = index < groups.length - 1 && group < 100;
+        const groupWords = readVietnameseTriplet(group, useFullHundreds);
+        if (groupWords) words.push(groupWords);
+        if (scales[index]) words.push(scales[index]);
+      }
+      const result = words.join(' ').replace(/\s+/g, ' ').trim();
+      return `${result.charAt(0).toUpperCase()}${result.slice(1)} đồng`;
+    }
 
     const themes = [
       { label: 'Sky', bg_color: 'bg-sky-50', text_color: 'text-sky-800', border_color: 'border-sky-200' },
@@ -132,9 +182,41 @@ createApp({
     const googleScriptText = ref('');
     const vendors = ref([]);
     const selectedVendorId = ref('');
-    const vendorForm = ref({ code: '', name: '', status: 'active' });
+    const vendorForm = ref({
+      code: '',
+      name: '',
+      status: 'active',
+      company_full_name: 'CHI NHÁNH CÔNG TY CP VN FOOD - NEP MART',
+      address: 'Lô 23-24 khu B2-87, KĐT ven sông Hòa Quý - Đồng Nò, Hòa Quý, Ngũ Hành Sơn, Đà Nẵng',
+      hotline: '085.728.0282',
+      tax_code: '',
+      default_creator_name: 'Thủ kho VNFS',
+      print_show_price_default: true
+    });
     const vendorSaving = ref(false);
     const editingVendorId = ref('');
+    const vendorProfileForm = ref({
+      company_full_name: '',
+      address: '',
+      hotline: '',
+      tax_code: '',
+      default_creator_name: '',
+      print_show_price_default: true
+    });
+    const vendorProfileLoading = ref(false);
+    const vendorProfileSaving = ref(false);
+    const currentVendor = computed(() => {
+      const adminVendor = vendors.value.find((vendor) => String(vendor.id) === String(currentUser.value?.vendor_id));
+      const profile = isAdmin.value ? (adminVendor || {}) : vendorProfileForm.value;
+      return {
+        ...profile,
+        name: adminVendor?.name || currentUser.value?.vendor_name || 'VN Food',
+        company_full_name: profile.company_full_name || adminVendor?.name || currentUser.value?.vendor_name || 'VN Food',
+        address: profile.address || '',
+        hotline: profile.hotline || '',
+        default_creator_name: profile.default_creator_name || 'Thủ kho VNFS'
+      };
+    });
     const isAdmin = computed(() => currentUser.value?.role === 'admin');
     const subscriptionCodes = ref([]);
     const subscriptionMetrics = ref({ total_revenue: 0, active_paid_vendors: 0, generated_codes: 0, used_codes: 0 });
@@ -189,7 +271,21 @@ createApp({
     const showCategoryDeleteModal = ref(false);
     const categoryToDelete = ref(null);
     const categoryDeleteConfirmText = ref('');
-    const schoolForm = ref({ id: '', name: '', bg_color: 'bg-sky-50', text_color: 'text-sky-800', border_color: 'border-sky-200', icon: 'fa-school', theme: 'bg-sky-50' });
+    const schoolForm = ref({
+      id: '',
+      name: '',
+      school_code: '',
+      full_name: '',
+      address: '',
+      contact_phone: '',
+      default_receiver_name: '',
+      has_teacher_order: true,
+      bg_color: 'bg-sky-50',
+      text_color: 'text-sky-800',
+      border_color: 'border-sky-200',
+      icon: 'fa-school',
+      theme: 'bg-sky-50'
+    });
     const stockForm = ref({ product_code: '', qty: 0 });
     const activeEditingCell = ref(null);
     const showSchoolDeleteModal = ref(false);
@@ -214,6 +310,38 @@ createApp({
     const batchPopover = ref({ open: false, rowId: '', schoolId: '', position: {} });
     const batchForm = ref({ qtyChange: '', notePreset: 'Đợt bổ sung chiều', note: '' });
     let lastFetchWarningAt = 0;
+
+    function createDefaultVendorForm() {
+      return {
+        code: '',
+        name: '',
+        status: 'active',
+        company_full_name: 'CHI NHÁNH CÔNG TY CP VN FOOD - NEP MART',
+        address: 'Lô 23-24 khu B2-87, KĐT ven sông Hòa Quý - Đồng Nò, Hòa Quý, Ngũ Hành Sơn, Đà Nẵng',
+        hotline: '085.728.0282',
+        tax_code: '',
+        default_creator_name: 'Thủ kho VNFS',
+        print_show_price_default: true
+      };
+    }
+
+    function createDefaultSchoolForm() {
+      return {
+        id: '',
+        name: '',
+        school_code: '',
+        full_name: '',
+        address: '',
+        contact_phone: '',
+        default_receiver_name: '',
+        has_teacher_order: true,
+        bg_color: 'bg-sky-50',
+        text_color: 'text-sky-800',
+        border_color: 'border-sky-200',
+        icon: 'fa-school',
+        theme: 'bg-sky-50'
+      };
+    }
 
     const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
     const isStandalone = computed(() =>
@@ -821,6 +949,7 @@ createApp({
               name: product.name,
               unit: product.unit,
               price: num(product.price),
+              orderGroup: row.order_group || row.orderGroup || product.order_group || 'children',
               qty: 0,
               amount: 0
             };
@@ -1009,11 +1138,21 @@ createApp({
       return schools.value.map((school) => {
         const schoolId = schoolKey(school);
         const items = Object.values(buckets[schoolId]).filter((item) => item.qty > 0).sort((a, b) => norm(a.code).localeCompare(norm(b.code)));
+        const teacherGroups = ['teacher', 'teachers', 'giáo viên', 'giao vien'];
+        const teacherItems = school.has_teacher_order
+          ? items.filter((item) => teacherGroups.includes(norm(item.orderGroup)))
+          : [];
+        const childrenItems = school.has_teacher_order
+          ? items.filter((item) => !teacherGroups.includes(norm(item.orderGroup)))
+          : items;
         return {
           id: schoolId,
           name: school.name,
           theme: school,
+          school,
           items,
+          childrenItems,
+          teacherItems,
           totalQty: items.reduce((sum, item) => sum + item.qty, 0),
           totalAmount: items.reduce((sum, item) => sum + item.amount, 0),
           totalsByUnit: summarizeByUnit(items)
@@ -1025,6 +1164,24 @@ createApp({
       .filter((receipt) => printSchoolId.value === 'all' || receipt.id === printSchoolId.value)
       .flatMap((receipt) => receipt.items));
     const totalsByUnit = computed(() => summarizeByUnit(activePrintItems.value));
+
+    function formattedPrintDate() {
+      const dateValue = new Date(`${deliveryDate.value}T00:00:00`);
+      if (Number.isNaN(dateValue.getTime())) return `Ngày ${deliveryDate.value}`;
+      return `Ngày ${String(dateValue.getDate()).padStart(2, '0')} tháng ${String(dateValue.getMonth() + 1).padStart(2, '0')} năm ${dateValue.getFullYear()}`;
+    }
+
+    function slipNumber(receipt) {
+      const code = String(receipt.school.school_code || receipt.school.code || receipt.school.id || 'TRUONG')
+        .trim()
+        .toUpperCase()
+        .replace(/\s+/g, '-');
+      return `PX-${deliveryDate.value.replace(/-/g, '')}-${code}`;
+    }
+
+    function totalAmountInWords(receipt) {
+      return numberToVietnameseWords(receipt.totalAmount);
+    }
 
     function persistLocal() {
       if (!activeVendorId.value) return;
@@ -1072,7 +1229,15 @@ createApp({
       vendors.value = [];
       selectedVendorId.value = '';
       provisionedPin.value = '';
-      vendorForm.value = { code: '', name: '', status: 'active' };
+      vendorForm.value = createDefaultVendorForm();
+      vendorProfileForm.value = {
+        company_full_name: '',
+        address: '',
+        hotline: '',
+        tax_code: '',
+        default_creator_name: '',
+        print_show_price_default: true
+      };
       vendorUserForm.value = { username: '', nickname: '', role: 'staff', vendor_id: '' };
       importSummary.value = null;
       catalogImportSummary.value = null;
@@ -1456,6 +1621,7 @@ function syncFromPortal() {
             void loadAdminSubscriptionData();
           }
         }
+        if (!isAdmin.value) await loadVendorProfile();
         return true;
       } catch (error) {
         logError('loadAuthUser', error);
@@ -1521,12 +1687,54 @@ function syncFromPortal() {
       passwordForm.value = { oldPassword: '', newPassword: '', confirmPassword: '' };
       userCPError.value = '';
       showUserCPModal.value = true;
+      if (!isAdmin.value && canManageCatalog.value) loadVendorProfile();
     }
 
     function closeUserCPModal() {
       showUserCPModal.value = false;
       userCPError.value = '';
       passwordForm.value = { oldPassword: '', newPassword: '', confirmPassword: '' };
+    }
+
+    async function loadVendorProfile() {
+      if (vendorProfileLoading.value || isAdmin.value || !currentUser.value?.vendor_id) return;
+      vendorProfileLoading.value = true;
+      try {
+        const profile = await fetchVendorProfile();
+        vendorProfileForm.value = {
+          company_full_name: profile.company_full_name || '',
+          address: profile.address || '',
+          hotline: profile.hotline || '',
+          tax_code: profile.tax_code || '',
+          default_creator_name: profile.default_creator_name || '',
+          print_show_price_default: profile.print_show_price_default !== false
+        };
+      } catch (error) {
+        logError('loadVendorProfile', error);
+      } finally {
+        vendorProfileLoading.value = false;
+      }
+    }
+
+    async function saveVendorProfile() {
+      if (vendorProfileSaving.value) return;
+      vendorProfileSaving.value = true;
+      try {
+        const profile = await saveVendorProfileApi(vendorProfileForm.value);
+        vendorProfileForm.value = {
+          company_full_name: profile.company_full_name || '',
+          address: profile.address || '',
+          hotline: profile.hotline || '',
+          tax_code: profile.tax_code || '',
+          default_creator_name: profile.default_creator_name || '',
+          print_show_price_default: profile.print_show_price_default !== false
+        };
+        addToast('Đã cập nhật hồ sơ nhà cung cấp.', 'success');
+      } catch (error) {
+        userCPError.value = error.message || 'Không thể cập nhật hồ sơ nhà cung cấp.';
+      } finally {
+        vendorProfileSaving.value = false;
+      }
     }
 
     async function saveUserProfile() {
@@ -1580,7 +1788,7 @@ function syncFromPortal() {
         });
         vendors.value = [...vendors.value, created].sort((left, right) => left.name.localeCompare(right.name));
         selectedVendorId.value = created.id;
-        vendorForm.value = { code: '', name: '', status: 'active' };
+        vendorForm.value = createDefaultVendorForm();
         users.value = await apiJson('/api/auth/users');
         addToast('Đã tạo vendor mới.', 'success');
       } catch (error) {
@@ -1592,7 +1800,18 @@ function syncFromPortal() {
 
     function editVendor(vendor) {
       editingVendorId.value = vendor.id;
-      vendorForm.value = { code: vendor.code || '', name: vendor.name || '', status: vendor.status || 'active' };
+      vendorForm.value = {
+        ...createDefaultVendorForm(),
+        code: vendor.code || '',
+        name: vendor.name || '',
+        status: vendor.status || 'active',
+        company_full_name: vendor.company_full_name || '',
+        address: vendor.address || '',
+        hotline: vendor.hotline || '',
+        tax_code: vendor.tax_code || '',
+        default_creator_name: vendor.default_creator_name || '',
+        print_show_price_default: vendor.print_show_price_default !== false
+      };
     }
 
     async function saveVendor() {
@@ -1608,7 +1827,7 @@ function syncFromPortal() {
           const index = vendors.value.findIndex((vendor) => vendor.id === updated.id);
           if (index >= 0) vendors.value[index] = updated;
           editingVendorId.value = '';
-          vendorForm.value = { code: '', name: '', status: 'active' };
+          vendorForm.value = createDefaultVendorForm();
           addToast('Đã cập nhật vendor.', 'success');
         } catch (error) {
           userCPError.value = error.message || 'Không thể cập nhật vendor.';
@@ -1759,6 +1978,17 @@ function syncFromPortal() {
 
     async function deleteSchoolApi(id) {
       return apiJson(`/api/schools/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    }
+
+    async function fetchVendorProfile() {
+      return apiJson('/api/vendor/profile');
+    }
+
+    async function saveVendorProfileApi(payload) {
+      return apiJson('/api/vendor/profile', {
+        method: 'PUT',
+        body: JSON.stringify(payload)
+      });
     }
 
     async function saveProductApi(payload) {
@@ -2009,6 +2239,12 @@ function syncFromPortal() {
         const response = await saveSchoolApi({
           code: school.code || school.id,
           name: school.name,
+          school_code: school.school_code || school.code || school.id,
+          full_name: school.full_name || school.name,
+          address: school.address || '',
+          contact_phone: school.contact_phone || '',
+          default_receiver_name: school.default_receiver_name || '',
+          has_teacher_order: school.has_teacher_order !== false,
           bg_color: school.bg_color,
           text_color: school.text_color,
           border_color: school.border_color,
@@ -2270,6 +2506,12 @@ function syncFromPortal() {
         id: existing?.id || crypto.randomUUID(),
         code,
         name: schoolForm.value.name.trim(),
+        school_code: norm(schoolForm.value.school_code || code).toUpperCase(),
+        full_name: (schoolForm.value.full_name || schoolForm.value.name).trim(),
+        address: String(schoolForm.value.address || '').trim(),
+        contact_phone: String(schoolForm.value.contact_phone || '').trim(),
+        default_receiver_name: String(schoolForm.value.default_receiver_name || '').trim(),
+        has_teacher_order: schoolForm.value.has_teacher_order !== false,
         bg_color: schoolForm.value.bg_color,
         text_color: schoolForm.value.text_color,
         border_color: schoolForm.value.border_color,
@@ -2290,12 +2532,19 @@ function syncFromPortal() {
 
     function editSchool(school) {
       editingSchool.value = true;
-      schoolForm.value = clone({ ...school, id: school.code || school.id, theme: school.bg_color });
+      schoolForm.value = clone({
+        ...createDefaultSchoolForm(),
+        ...school,
+        id: school.code || school.id,
+        school_code: school.school_code || school.code || school.id,
+        full_name: school.full_name || school.name,
+        theme: school.bg_color
+      });
     }
 
     function resetSchoolForm() {
       editingSchool.value = false;
-      schoolForm.value = { id: '', name: '', bg_color: 'bg-sky-50', text_color: 'text-sky-800', border_color: 'border-sky-200', icon: 'fa-school', theme: 'bg-sky-50' };
+      schoolForm.value = createDefaultSchoolForm();
     }
 
     function promptDeleteSchool(school) {
@@ -2349,8 +2598,11 @@ function syncFromPortal() {
     function addDefaultSchool() {
       const theme = themes[Math.floor(Math.random() * themes.length)];
       schoolForm.value = {
+        ...createDefaultSchoolForm(),
         id: `school_${Date.now()}`,
         name: 'Trường mới',
+        school_code: `school_${Date.now()}`,
+        full_name: 'Trường mới',
         bg_color: theme.bg_color,
         text_color: theme.text_color,
         border_color: theme.border_color,
@@ -3115,7 +3367,10 @@ function syncFromPortal() {
     }
 
     function getSlipPriceToggle(slipId) {
-      return slipPriceVisibility[slipId] !== false;
+      if (slipPriceVisibility[slipId] === undefined) {
+        slipPriceVisibility[slipId] = currentVendor.value.print_show_price_default !== false;
+      }
+      return slipPriceVisibility[slipId];
     }
 
     function toggleSlipPrice(slipId) {
@@ -3313,6 +3568,7 @@ function syncFromPortal() {
       pendingMutationCount,
       isAuthenticated,
       currentUser,
+      currentVendor,
       currentVendorName,
       users,
       pendingPinUsers,
@@ -3343,10 +3599,16 @@ function syncFromPortal() {
       vendors,
       selectedVendorId,
       vendorForm,
+      createDefaultVendorForm,
       vendorSaving,
       editingVendorId,
+      vendorProfileForm,
+      vendorProfileLoading,
+      vendorProfileSaving,
       editVendor,
       saveVendor,
+      loadVendorProfile,
+      saveVendorProfile,
       isAdmin,
       userRole,
       canManageCatalog,
@@ -3422,6 +3684,10 @@ function syncFromPortal() {
       receipts: receiptsComputed,
       activePrintItems,
       totalsByUnit,
+      formattedPrintDate,
+      slipNumber,
+      totalAmountInWords,
+      numberToVietnameseWords,
       totalBySchool,
       totalSchoolMoney,
       totalRealCost,
