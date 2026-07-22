@@ -219,6 +219,17 @@ class VendorSchema(BaseModel):
     code: str = Field(..., min_length=2, max_length=50)
     name: str = Field(..., min_length=2, max_length=150)
     status: str = Field(default="active")
+    company_full_name: Optional[str] = Field(
+        default="CHI NHÁNH CÔNG TY CP VN FOOD - NEP MART", max_length=250
+    )
+    address: Optional[str] = Field(
+        default="Lô 23-24 khu B2-87, KĐT ven sông Hòa Quý - Đồng Nò, Hòa Quý, Ngũ Hành Sơn, Đà Nẵng",
+        max_length=500,
+    )
+    hotline: Optional[str] = Field(default="085.728.0282", max_length=50)
+    tax_code: Optional[str] = Field(default=None, max_length=50)
+    default_creator_name: Optional[str] = Field(default="Thủ kho VNFS", max_length=150)
+    print_show_price_default: bool = True
 
 
 class VendorRecord(VendorSchema):
@@ -226,6 +237,15 @@ class VendorRecord(VendorSchema):
     created_at: datetime
     subscription_due_date: Optional[date] = None
     subscription_status: Optional[str] = None
+
+
+class VendorProfileUpdateSchema(BaseModel):
+    company_full_name: Optional[str] = Field(default=None, max_length=250)
+    address: Optional[str] = Field(default=None, max_length=500)
+    hotline: Optional[str] = Field(default=None, max_length=50)
+    tax_code: Optional[str] = Field(default=None, max_length=50)
+    default_creator_name: Optional[str] = Field(default=None, max_length=150)
+    print_show_price_default: bool = True
 
 
 class AssignVendorUserSchema(BaseModel):
@@ -437,6 +457,12 @@ class SchoolSchema(BaseModel):
     text_color: str = Field("text-sky-850", description="Màu chữ Tailwind đại diện")
     border_color: str = Field("border-sky-200", description="Màu viền Tailwind")
     icon: str = Field("fa-school", description="Icon FontAwesome hiển thị")
+    school_code: Optional[str] = Field(default=None, max_length=50)
+    full_name: Optional[str] = Field(default=None, max_length=250)
+    address: Optional[str] = Field(default=None, max_length=500)
+    contact_phone: Optional[str] = Field(default=None, max_length=50)
+    default_receiver_name: Optional[str] = Field(default=None, max_length=150)
+    has_teacher_order: bool = True
 
 
 class ProductSchema(BaseModel):
@@ -525,7 +551,10 @@ def _code(value: str) -> str:
 
 
 def _school_select() -> str:
-    return "id,code,name,bg_color,text_color,border_color,icon,created_at"
+    return (
+        "id,code,name,bg_color,text_color,border_color,icon,school_code,full_name,"
+        "address,contact_phone,default_receiver_name,has_teacher_order,created_at"
+    )
 
 
 def _product_select() -> str:
@@ -850,13 +879,73 @@ async def list_vendors(_: Dict[str, Any] = Depends(require_admin_user)):
         response = (
             require_read_client()
             .table("vendors")
-            .select("id,code,name,status,created_at,subscription_due_date,subscription_status")
+            .select(
+                "id,code,name,status,company_full_name,address,hotline,tax_code,"
+                "default_creator_name,print_show_price_default,created_at,"
+                "subscription_due_date,subscription_status"
+            )
             .order("name")
             .execute()
         )
         return response.data or []
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Không thể tải danh sách vendor: {exc}") from exc
+
+
+@app.get("/api/vendor/profile", response_model=VendorRecord)
+async def get_vendor_profile(user: Dict[str, Any] = Depends(require_bearer_user)):
+    vendor_id = _vendor_id(user)
+    if not vendor_id:
+        raise HTTPException(status_code=403, detail="Tài khoản không có vendor vận hành.")
+    try:
+        response = (
+            require_read_client()
+            .table("vendors")
+            .select(
+                "id,code,name,status,company_full_name,address,hotline,tax_code,"
+                "default_creator_name,print_show_price_default,created_at,"
+                "subscription_due_date,subscription_status"
+            )
+            .eq("id", vendor_id)
+            .limit(1)
+            .execute()
+        )
+        if not response.data:
+            raise HTTPException(status_code=404, detail="Không tìm thấy vendor hiện tại.")
+        return response.data[0]
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Không thể tải hồ sơ vendor: {exc}") from exc
+
+
+@app.put("/api/vendor/profile", response_model=VendorRecord)
+async def update_vendor_profile(
+    payload: VendorProfileUpdateSchema,
+    user: Dict[str, Any] = Depends(require_management_user),
+):
+    vendor_id = _vendor_id(user)
+    if not vendor_id:
+        raise HTTPException(status_code=403, detail="Tài khoản không có vendor vận hành.")
+    record = payload.model_dump()
+    for field in ("company_full_name", "address", "hotline", "tax_code", "default_creator_name"):
+        if record[field] is not None:
+            record[field] = record[field].strip() or None
+    try:
+        response = (
+            require_write_client()
+            .table("vendors")
+            .update(record)
+            .eq("id", vendor_id)
+            .execute()
+        )
+        if not response.data:
+            raise HTTPException(status_code=404, detail="Không tìm thấy vendor hiện tại.")
+        return response.data[0]
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Không thể cập nhật hồ sơ vendor: {exc}") from exc
 
 
 @app.get("/api/admin/subscription-codes", response_model=List[SubscriptionCodeRecord])

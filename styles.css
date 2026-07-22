@@ -202,6 +202,11 @@ body {
 }
 
 @media print {
+  @page {
+    size: auto;
+    margin: 10mm;
+  }
+
   body {
     background: #fff !important;
   }
@@ -222,5 +227,22 @@ body {
   .print-card {
     box-shadow: none !important;
     border-color: #000 !important;
+  }
+
+  .print-sheet {
+    width: 100% !important;
+    max-width: none !important;
+    border-radius: 0 !important;
+    overflow: visible !important;
+    font-size: 10pt;
+  }
+
+  .print-sheet table {
+    page-break-inside: auto;
+  }
+
+  .print-sheet tr {
+    page-break-inside: avoid;
+    page-break-after: auto;
   }
 }
