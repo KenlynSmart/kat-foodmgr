@@ -1,14 +1,17 @@
 import asyncio
 import calendar
 import os
+import re
 import secrets
 from contextvars import ContextVar
 from pathlib import Path
 from datetime import date, datetime
 from typing import Any, Dict, List, Optional
+from typing import Literal
 from uuid import UUID
 
 import jwt
+import httpx
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, status
 from fastapi.encoders import jsonable_encoder
 from fastapi.middleware.cors import CORSMiddleware
@@ -275,6 +278,37 @@ class AuthResponse(BaseModel):
     must_change_password: bool = False
 
 
+class GoogleSheetConfigCreateSchema(BaseModel):
+    school_id: Optional[UUID] = None
+    sheet_name: str = Field(..., min_length=1, max_length=150)
+    sheet_url: str = Field(..., min_length=1, max_length=500)
+    sheet_id: Optional[str] = Field(default=None, max_length=200)
+    sync_direction: Literal["two_way", "push_to_sheet", "pull_from_sheet"] = "two_way"
+    auto_sync_enabled: bool = True
+
+
+class GoogleSheetConfigRecord(GoogleSheetConfigCreateSchema):
+    id: UUID
+    vendor_id: UUID
+    webhook_token: str
+    last_synced_at: Optional[datetime] = None
+    status: str
+    created_at: datetime
+
+
+class GoogleSheetWebhookSchema(BaseModel):
+    config_id: UUID
+    token: str
+    entity: Literal["catalog", "orders"] = "catalog"
+    delivery_date: Optional[date] = None
+    records: List[Dict[str, Any]] = Field(default_factory=list)
+
+
+class GoogleSheetManualTriggerSchema(BaseModel):
+    config_id: UUID
+    delivery_date: Optional[date] = None
+
+
 def _create_app_token(user: Dict[str, Any]) -> str:
     now = datetime.utcnow()
     payload = {
@@ -348,6 +382,7 @@ PUBLIC_API_PATHS = {
     "/api/auth/login",
     "/api/auth/google/url",
     "/api/auth/google/callback",
+    "/api/sync/google-sheets/webhook",
 }
 
 OPERATIONAL_API_PREFIXES = (
@@ -361,7 +396,12 @@ OPERATIONAL_API_PREFIXES = (
 
 @app.middleware("http")
 async def protect_api_routes(request: Request, call_next):
-    if request.method == "OPTIONS" or not request.url.path.startswith("/api/") or request.url.path in PUBLIC_API_PATHS:
+    if (
+        request.method == "OPTIONS"
+        or not request.url.path.startswith("/api/")
+        or request.url.path in PUBLIC_API_PATHS
+        or request.url.path.startswith("/api/sync/google-sheets/payload/")
+    ):
         return await call_next(request)
 
     try:
@@ -1603,3 +1643,375 @@ async def clear_daily_orders(date: date):
             status_code=500,
             detail=f"Lỗi dọn sạch dữ liệu ngày: {exc}",
         )
+
+
+GOOGLE_SHEET_ID_PATTERN = re.compile(r"/spreadsheets/d/([A-Za-z0-9_-]+)")
+
+
+def _google_sheet_id(sheet_url: str) -> Optional[str]:
+    match = GOOGLE_SHEET_ID_PATTERN.search(str(sheet_url))
+    return match.group(1) if match else None
+
+
+def _google_sheet_config_query(config_id: UUID, vendor_id: str, client: Client) -> Any:
+    return (
+        client.table("google_sheet_configs")
+        .select(
+            "id,vendor_id,school_id,sheet_name,sheet_url,sheet_id,sync_direction,"
+            "auto_sync_enabled,webhook_token,last_synced_at,status,created_at"
+        )
+        .eq("id", str(config_id))
+        .eq("vendor_id", vendor_id)
+        .limit(1)
+    )
+
+
+def _require_google_config(config_id: UUID, vendor_id: str, client: Client) -> Dict[str, Any]:
+    response = _google_sheet_config_query(config_id, vendor_id, client).execute()
+    if not response.data:
+        raise HTTPException(status_code=404, detail="Không tìm thấy cấu hình Google Sheets.")
+    return response.data[0]
+
+
+def _google_sheet_catalog_payload(vendor_id: str, client: Client) -> List[Dict[str, Any]]:
+    categories = (
+        client.table("categories")
+        .select("id,name")
+        .eq("vendor_id", vendor_id)
+        .execute()
+    ).data or []
+    category_names = {str(row["id"]): row.get("name") or "Chưa phân nhóm" for row in categories}
+    products = (
+        client.table("products")
+        .select("id,code,name,unit,price,category_id")
+        .eq("vendor_id", vendor_id)
+        .order("code")
+        .execute()
+    ).data or []
+    return [
+        {
+            "category": category_names.get(str(product.get("category_id")), "Chưa phân nhóm"),
+            "code": product.get("code") or "",
+            "name": product.get("name") or "",
+            "unit": product.get("unit") or "",
+            "price": product.get("price") or 0,
+            "status": "Active",
+            "product_id": product.get("id"),
+        }
+        for product in products
+    ]
+
+
+def _google_sheet_payload(
+    config: Dict[str, Any],
+    delivery_date: Optional[date],
+    client: Client,
+) -> Dict[str, Any]:
+    vendor_id = str(config["vendor_id"])
+    orders_query = (
+        client.table("daily_orders")
+        .select("id,delivery_date,product_id,school_id,qty")
+        .eq("vendor_id", vendor_id)
+        .order("delivery_date")
+    )
+    if delivery_date:
+        orders_query = orders_query.eq("delivery_date", delivery_date.isoformat())
+    if config.get("school_id"):
+        orders_query = orders_query.eq("school_id", str(config["school_id"]))
+    orders = orders_query.execute().data or []
+    return {
+        "catalog": _google_sheet_catalog_payload(vendor_id, client),
+        "orders": orders,
+        "delivery_date": delivery_date.isoformat() if delivery_date else None,
+    }
+
+
+def _mark_google_config_synced(config_id: UUID, vendor_id: str, client: Client) -> None:
+    client.table("google_sheet_configs").update(
+        {"last_synced_at": datetime.utcnow().isoformat()}
+    ).eq("id", str(config_id)).eq("vendor_id", vendor_id).execute()
+
+
+@app.get("/api/sync/google-sheets/config", response_model=List[GoogleSheetConfigRecord])
+async def list_google_sheet_configs(
+    user: Dict[str, Any] = Depends(require_management_user),
+):
+    vendor_id = _vendor_id(user)
+    if not vendor_id:
+        raise HTTPException(status_code=403, detail="Admin không có cấu hình Sheets theo vendor.")
+    try:
+        return (
+            require_read_client()
+            .table("google_sheet_configs")
+            .select(
+                "id,vendor_id,school_id,sheet_name,sheet_url,sheet_id,sync_direction,"
+                "auto_sync_enabled,webhook_token,last_synced_at,status,created_at"
+            )
+            .eq("vendor_id", vendor_id)
+            .order("created_at")
+            .execute()
+        ).data or []
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Không thể tải cấu hình Google Sheets: {exc}") from exc
+
+
+@app.post(
+    "/api/sync/google-sheets/config",
+    response_model=GoogleSheetConfigRecord,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_google_sheet_config(
+    payload: GoogleSheetConfigCreateSchema,
+    user: Dict[str, Any] = Depends(require_management_user),
+):
+    vendor_id = _vendor_id(user)
+    if not vendor_id:
+        raise HTTPException(status_code=403, detail="Admin không có cấu hình Sheets theo vendor.")
+    sheet_id = payload.sheet_id or _google_sheet_id(payload.sheet_url)
+    if not sheet_id:
+        raise HTTPException(status_code=422, detail="URL Google Sheets không chứa Spreadsheet ID hợp lệ.")
+    if payload.school_id:
+        school = (
+            require_read_client()
+            .table("schools")
+            .select("id")
+            .eq("id", str(payload.school_id))
+            .eq("vendor_id", vendor_id)
+            .limit(1)
+            .execute()
+        ).data
+        if not school:
+            raise HTTPException(status_code=404, detail="Trường không thuộc vendor hiện tại.")
+    record = {
+        **payload.model_dump(exclude={"sheet_id"}),
+        "vendor_id": vendor_id,
+        "sheet_id": sheet_id,
+        "webhook_token": secrets.token_urlsafe(24),
+        "status": "active",
+    }
+    try:
+        response = require_write_client().table("google_sheet_configs").insert(record).execute()
+        if not response.data:
+            raise HTTPException(status_code=400, detail="Không thể lưu cấu hình Google Sheets.")
+        return response.data[0]
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Lỗi lưu cấu hình Google Sheets: {exc}") from exc
+
+
+@app.put("/api/sync/google-sheets/config/{config_id}", response_model=GoogleSheetConfigRecord)
+async def update_google_sheet_config(
+    config_id: UUID,
+    payload: GoogleSheetConfigCreateSchema,
+    user: Dict[str, Any] = Depends(require_management_user),
+):
+    vendor_id = _vendor_id(user)
+    if not vendor_id:
+        raise HTTPException(status_code=403, detail="Admin không có cấu hình Sheets theo vendor.")
+    sheet_id = payload.sheet_id or _google_sheet_id(payload.sheet_url)
+    if not sheet_id:
+        raise HTTPException(status_code=422, detail="URL Google Sheets không chứa Spreadsheet ID hợp lệ.")
+    if payload.school_id:
+        school = (
+            require_read_client()
+            .table("schools")
+            .select("id")
+            .eq("id", str(payload.school_id))
+            .eq("vendor_id", vendor_id)
+            .limit(1)
+            .execute()
+        ).data
+        if not school:
+            raise HTTPException(status_code=404, detail="Trường không thuộc vendor hiện tại.")
+    record = {
+        **payload.model_dump(exclude={"sheet_id"}),
+        "sheet_id": sheet_id,
+    }
+    try:
+        response = (
+            require_write_client()
+            .table("google_sheet_configs")
+            .update(record)
+            .eq("id", str(config_id))
+            .eq("vendor_id", vendor_id)
+            .execute()
+        )
+        if not response.data:
+            raise HTTPException(status_code=404, detail="Không tìm thấy cấu hình Google Sheets.")
+        return response.data[0]
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Lỗi cập nhật cấu hình Google Sheets: {exc}") from exc
+
+
+@app.delete("/api/sync/google-sheets/config/{config_id}")
+async def delete_google_sheet_config(
+    config_id: UUID,
+    user: Dict[str, Any] = Depends(require_management_user),
+):
+    vendor_id = _vendor_id(user)
+    if not vendor_id:
+        raise HTTPException(status_code=403, detail="Admin không có cấu hình Sheets theo vendor.")
+    try:
+        response = (
+            require_write_client()
+            .table("google_sheet_configs")
+            .delete()
+            .eq("id", str(config_id))
+            .eq("vendor_id", vendor_id)
+            .execute()
+        )
+        if not response.data:
+            raise HTTPException(status_code=404, detail="Không tìm thấy cấu hình Google Sheets.")
+        return {"status": "success"}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Lỗi xóa cấu hình Google Sheets: {exc}") from exc
+
+
+@app.post("/api/sync/google-sheets/test")
+async def test_google_sheet_config(
+    config_id: UUID,
+    user: Dict[str, Any] = Depends(require_management_user),
+):
+    vendor_id = _vendor_id(user)
+    if not vendor_id:
+        raise HTTPException(status_code=403, detail="Admin không có cấu hình Sheets theo vendor.")
+    config = _require_google_config(config_id, vendor_id, require_read_client())
+    sheet_id = config.get("sheet_id") or _google_sheet_id(config.get("sheet_url", ""))
+    if not sheet_id:
+        return {"status": "error", "message": "Không đọc được Spreadsheet ID từ URL."}
+    csv_url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv"
+    try:
+        async with httpx.AsyncClient(timeout=8, follow_redirects=True) as client:
+            response = await client.get(csv_url)
+        if response.status_code == 200:
+            return {"status": "connected", "message": "Sheet đang công khai và có thể đọc qua CSV export."}
+        return {
+            "status": "configured",
+            "message": "Đã nhận diện Sheet nhưng quyền đọc trực tiếp bị giới hạn; dùng Apps Script để đồng bộ riêng tư.",
+        }
+    except httpx.HTTPError:
+        return {
+            "status": "configured",
+            "message": "Đã nhận diện Spreadsheet ID; chưa thể kiểm tra mạng trực tiếp.",
+        }
+
+
+@app.post("/api/sync/google-sheets/manual-trigger")
+async def manual_google_sheet_sync(
+    payload: GoogleSheetManualTriggerSchema,
+    user: Dict[str, Any] = Depends(require_management_user),
+):
+    vendor_id = _vendor_id(user)
+    if not vendor_id:
+        raise HTTPException(status_code=403, detail="Admin không có cấu hình Sheets theo vendor.")
+    try:
+        client = require_read_client()
+        config = _require_google_config(payload.config_id, vendor_id, client)
+        sync_payload = _google_sheet_payload(config, payload.delivery_date, client)
+        return {
+            "status": "bridge_ready",
+            "mode": config["sync_direction"],
+            "message": "Đã tạo gói dữ liệu; Apps Script cần chạy để ghi vào Google Sheet.",
+            "config": config,
+            "payload": sync_payload,
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Lỗi tạo gói đồng bộ Google Sheets: {exc}") from exc
+
+
+@app.get("/api/sync/google-sheets/payload/{config_id}")
+async def public_google_sheet_payload(config_id: UUID, token: str, delivery_date: Optional[date] = None):
+    client = require_read_client()
+    response = client.table("google_sheet_configs").select(
+        "id,vendor_id,school_id,sheet_name,sheet_url,sheet_id,sync_direction,"
+        "auto_sync_enabled,webhook_token,last_synced_at,status,created_at"
+    ).eq("id", str(config_id)).limit(1).execute()
+    config = response.data[0] if response.data else None
+    if not config or not secrets.compare_digest(str(config.get("webhook_token")), token):
+        raise HTTPException(status_code=401, detail="Sync token không hợp lệ.")
+    sync_payload = _google_sheet_payload(config, delivery_date, client)
+    _mark_google_config_synced(config_id, str(config["vendor_id"]), require_write_client())
+    return sync_payload
+
+
+@app.post("/api/sync/google-sheets/webhook")
+async def google_sheet_webhook(payload: GoogleSheetWebhookSchema):
+    read_client = require_read_client()
+    config_response = read_client.table("google_sheet_configs").select(
+        "id,vendor_id,school_id,webhook_token,status"
+    ).eq("id", str(payload.config_id)).limit(1).execute()
+    config = config_response.data[0] if config_response.data else None
+    if not config or config.get("status") != "active" or not secrets.compare_digest(
+        str(config.get("webhook_token")), payload.token
+    ):
+        raise HTTPException(status_code=401, detail="Sync token không hợp lệ.")
+    vendor_id = str(config["vendor_id"])
+    write_client = require_write_client()
+    accepted = 0
+    if payload.entity == "catalog":
+        for record in payload.records:
+            code = _code(str(record.get("code") or record.get("shortcut") or ""))
+            name = str(record.get("name") or "").strip()
+            unit = str(record.get("unit") or "").strip()
+            if not code or not name or not unit:
+                continue
+            category_name = str(record.get("category") or record.get("category_name") or "").strip()
+            category_id = None
+            if category_name:
+                category_response = write_client.table("categories").upsert(
+                    {"vendor_id": vendor_id, "name": category_name},
+                    on_conflict="vendor_id,name",
+                ).execute()
+                if category_response.data:
+                    category_id = category_response.data[0].get("id")
+            write_client.table("products").upsert(
+                {
+                    "vendor_id": vendor_id,
+                    "code": code,
+                    "name": name,
+                    "unit": unit,
+                    "price": float(record.get("price") or 0),
+                    "category_id": category_id,
+                },
+                on_conflict="vendor_id,code",
+            ).execute()
+            accepted += 1
+    else:
+        default_date = payload.delivery_date or date.today()
+        for record in payload.records:
+            product_id = record.get("product_id")
+            school_id = record.get("school_id") or config.get("school_id")
+            if not product_id and record.get("code"):
+                product_response = read_client.table("products").select("id").eq(
+                    "vendor_id", vendor_id
+                ).eq("code", _code(str(record["code"]))).limit(1).execute()
+                product_id = product_response.data[0]["id"] if product_response.data else None
+            if not product_id or not school_id:
+                continue
+            school_response = read_client.table("schools").select("id").eq(
+                "vendor_id", vendor_id
+            ).eq("id", str(school_id)).limit(1).execute()
+            if not school_response.data:
+                continue
+            write_client.table("daily_orders").upsert(
+                {
+                    "vendor_id": vendor_id,
+                    "delivery_date": str(record.get("delivery_date") or default_date),
+                    "product_id": str(product_id),
+                    "school_id": str(school_id),
+                    "qty": float(record.get("qty") or 0),
+                },
+                on_conflict="vendor_id,delivery_date,product_id,school_id",
+            ).execute()
+            accepted += 1
+    _mark_google_config_synced(payload.config_id, vendor_id, write_client)
+    return {"status": "success", "accepted_records": accepted}

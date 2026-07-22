@@ -839,6 +839,131 @@
         </div>
       </section>
 
+      <section v-if="!isAdmin" v-show="currentTab === 'export'" class="space-y-6">
+        <div class="grid gap-6 lg:grid-cols-2">
+          <div class="panel space-y-4">
+            <div class="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <h2 class="section-title">Xuất Danh Mục Sản Phẩm</h2>
+                <p class="section-subtitle">File Excel đã nhóm theo danh mục, sẵn sàng nạp vào Google Sheets hoặc Excel.</p>
+              </div>
+              <span class="badge">{{ categoryGroupedCatalog.length }} mặt hàng</span>
+            </div>
+            <div class="flex flex-wrap gap-2">
+              <button @click="exportCategoryGroupedCatalog" class="btn-primary">
+                <i class="fa-solid fa-file-excel mr-1"></i>Tải File Danh Mục (.xlsx)
+              </button>
+              <button @click="copyCategoryGroupedCatalog" class="btn-secondary">
+                <i class="fa-regular fa-copy mr-1"></i>Sao chép chuỗi dữ liệu
+              </button>
+            </div>
+            <div class="max-h-[28rem] overflow-auto rounded-2xl border border-slate-100">
+              <table class="min-w-full text-sm">
+                <thead class="thead">
+                  <tr>
+                    <th class="th">Nhóm</th>
+                    <th class="th">Shortcut</th>
+                    <th class="th">Tên sản phẩm</th>
+                    <th class="th">ĐVT</th>
+                    <th class="th text-right">Đơn giá</th>
+                    <th class="th">Trạng thái</th>
+                  </tr>
+                </thead>
+                <tbody class="divide-y divide-slate-100">
+                  <tr v-for="item in categoryGroupedCatalog" :key="`${item.category}-${item.code}`">
+                    <td class="px-3 py-2 font-semibold text-emerald-700">{{ item.category }}</td>
+                    <td class="px-3 py-2 font-mono uppercase">{{ item.code }}</td>
+                    <td class="px-3 py-2">{{ item.name }}</td>
+                    <td class="px-3 py-2">{{ item.unit }}</td>
+                    <td class="px-3 py-2 text-right">{{ money(item.price) }}</td>
+                    <td class="px-3 py-2 text-emerald-700">{{ item.status }}</td>
+                  </tr>
+                </tbody>
+              </table>
+              <p v-if="!categoryGroupedCatalog.length" class="px-4 py-8 text-center text-sm italic text-slate-400">Chưa có sản phẩm để xuất.</p>
+            </div>
+          </div>
+
+          <div class="panel space-y-4">
+            <div>
+              <h2 class="section-title">Cấu Hình Đồng Bộ Google Sheets 2 Chiều</h2>
+              <p class="section-subtitle">Mỗi cấu hình được khóa theo vendor hiện tại và có token riêng cho Apps Script.</p>
+            </div>
+            <form @submit.prevent="saveGoogleSheetConfig" class="space-y-3 rounded-2xl border border-emerald-100 bg-emerald-50 p-4">
+              <select v-model="googleSheetForm.school_id" class="input">
+                <option value="">Toàn bộ vendor / không giới hạn trường</option>
+                <option v-for="school in schools" :key="school.id" :value="school.id">{{ school.name }}</option>
+              </select>
+              <input v-model.trim="googleSheetForm.sheet_name" class="input" placeholder="Tên cấu hình, ví dụ: Sheet Nhập Liệu Mitsuba" required>
+              <input v-model.trim="googleSheetForm.sheet_url" class="input" placeholder="https://docs.google.com/spreadsheets/d/.../edit" required>
+              <div class="grid gap-3 sm:grid-cols-2">
+                <select v-model="googleSheetForm.sync_direction" class="input">
+                  <option value="two_way">2 chiều (Two-Way)</option>
+                  <option value="push_to_sheet">Chỉ đẩy sang Sheet (Push)</option>
+                  <option value="pull_from_sheet">Chỉ nạp từ Sheet (Pull)</option>
+                </select>
+                <label class="flex items-center gap-2 rounded-xl border border-emerald-100 bg-white px-3 text-sm font-semibold text-slate-700">
+                  <input v-model="googleSheetForm.auto_sync_enabled" type="checkbox" class="h-4 w-4 rounded text-emerald-600">
+                  Tự động đồng bộ
+                </label>
+              </div>
+              <div class="flex flex-wrap gap-2">
+                <button type="submit" class="btn-primary" :disabled="googleSheetSaving">
+                  <i class="fa-solid" :class="googleSheetSaving ? 'fa-spinner fa-spin' : 'fa-floppy-disk'"></i>
+                  {{ googleSheetSaving ? 'Đang lưu...' : googleSheetEditingId ? 'Lưu cấu hình' : 'Thêm kết nối' }}
+                </button>
+                <button v-if="googleSheetEditingId" type="button" @click="resetGoogleSheetForm" class="btn-secondary">Hủy sửa</button>
+              </div>
+            </form>
+            <div class="rounded-xl border border-sky-100 bg-sky-50 px-3 py-2 text-xs text-sky-800">
+              <i class="fa-solid fa-circle-info mr-1"></i>
+              Sheet riêng tư cần cài Apps Script ở nút “Lấy mã Apps Script”; không cần đưa Google credential vào VNFS-Portal.
+            </div>
+          </div>
+        </div>
+
+        <div class="panel space-y-4">
+          <div class="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h3 class="section-title">Kết nối đã lưu</h3>
+              <p class="section-subtitle">Kiểm tra, tạo gói đồng bộ hoặc lấy script cho từng Sheet.</p>
+            </div>
+            <button @click="loadGoogleSheetConfigs" class="btn-secondary" :disabled="googleSheetLoading">
+              <i class="fa-solid" :class="googleSheetLoading ? 'fa-spinner fa-spin' : 'fa-rotate'"></i> Làm mới
+            </button>
+          </div>
+          <div class="overflow-x-auto">
+            <table class="min-w-full text-sm">
+              <thead class="thead">
+                <tr><th class="th">Tên Sheet</th><th class="th">Trường</th><th class="th">Chế độ</th><th class="th">Trạng thái</th><th class="th">Lần cuối</th><th class="th text-right">Thao tác</th></tr>
+              </thead>
+              <tbody class="divide-y divide-slate-100">
+                <tr v-for="config in googleSheetConfigs" :key="config.id">
+                  <td class="px-3 py-2">
+                    <div class="font-semibold">{{ config.sheet_name }}</div>
+                    <div class="max-w-xs truncate text-xs text-slate-400" :title="config.sheet_url">{{ config.sheet_url }}</div>
+                  </td>
+                  <td class="px-3 py-2">{{ schools.find(school => String(school.id) === String(config.school_id))?.name || 'Toàn vendor' }}</td>
+                  <td class="px-3 py-2">{{ config.sync_direction === 'two_way' ? '2 chiều' : config.sync_direction === 'push_to_sheet' ? 'Đẩy sang Sheet' : 'Nạp từ Sheet' }}</td>
+                  <td class="px-3 py-2"><span class="rounded-full bg-emerald-50 px-2 py-1 text-xs font-semibold text-emerald-700">{{ config.status || 'active' }}</span></td>
+                  <td class="px-3 py-2 text-xs text-slate-500">{{ config.last_synced_at || 'Chưa đồng bộ' }}</td>
+                  <td class="px-3 py-2 text-right">
+                    <div class="flex flex-wrap justify-end gap-2">
+                      <button @click="testGoogleSheetConfig(config)" class="text-sky-700" :disabled="googleSheetBusyId === config.id">Kiểm tra</button>
+                      <button @click="triggerGoogleSheetSync(config)" class="text-emerald-700" :disabled="googleSheetBusyId === config.id">Đồng bộ ngay</button>
+                      <button @click="openGoogleScriptModal(config)" class="text-violet-700">Apps Script</button>
+                      <button @click="editGoogleSheetConfig(config)" class="text-slate-600">Sửa</button>
+                      <button @click="deleteGoogleSheetConfig(config)" class="text-rose-600">Xóa</button>
+                    </div>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+            <p v-if="!googleSheetConfigs.length" class="py-8 text-center text-sm italic text-slate-400">Chưa có kết nối Google Sheets.</p>
+          </div>
+        </div>
+      </section>
+
       <section v-if="isAdmin" v-show="currentTab === 'admin-subscriptions'" class="space-y-6">
         <div class="panel space-y-4">
           <div>
@@ -1198,6 +1323,23 @@
         <div class="flex gap-2 justify-end">
           <button @click="closeCategoryDeleteModal" class="btn-secondary">Huỷ</button>
           <button @click="confirmDeleteCategory" class="btn-danger">Xác nhận xóa</button>
+        </div>
+      </div>
+    </div>
+
+    <div v-if="showGoogleScriptModal" class="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/70 p-4 no-print">
+      <div class="w-full max-w-4xl rounded-2xl bg-white p-6 shadow-2xl">
+        <div class="flex items-start justify-between gap-3">
+          <div>
+            <h3 class="text-lg font-bold text-emerald-700">Apps Script đồng bộ Google Sheets</h3>
+            <p class="text-sm text-slate-500">Dán mã vào Extensions → Apps Script, sau đó cài trigger onEdit và trigger định kỳ cho <code>syncFromPortal</code>.</p>
+          </div>
+          <button @click="showGoogleScriptModal = false" class="btn-secondary">Đóng</button>
+        </div>
+        <textarea :value="googleScriptText" rows="22" readonly class="textarea mt-4 font-mono text-xs"></textarea>
+        <div class="mt-3 flex justify-end gap-2">
+          <button @click="copyGoogleScript" class="btn-primary"><i class="fa-regular fa-copy mr-1"></i>Sao chép mã</button>
+          <button @click="showGoogleScriptModal = false" class="btn-secondary">Xong</button>
         </div>
       </div>
     </div>
