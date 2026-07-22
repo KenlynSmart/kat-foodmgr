@@ -116,6 +116,20 @@ createApp({
     const currentVendorName = computed(() => currentUser.value?.vendor_name || 'Hệ thống Quản trị');
     const users = ref([]);
     const pendingPinUsers = computed(() => users.value.filter((user) => user.temp_pin));
+    const googleSheetConfigs = ref([]);
+    const googleSheetForm = reactive({
+      school_id: '',
+      sheet_name: '',
+      sheet_url: '',
+      sync_direction: 'two_way',
+      auto_sync_enabled: true
+    });
+    const googleSheetEditingId = ref('');
+    const googleSheetLoading = ref(false);
+    const googleSheetSaving = ref(false);
+    const googleSheetBusyId = ref('');
+    const showGoogleScriptModal = ref(false);
+    const googleScriptText = ref('');
     const vendors = ref([]);
     const selectedVendorId = ref('');
     const vendorForm = ref({ code: '', name: '', status: 'active' });
@@ -234,6 +248,7 @@ createApp({
       { id: 'stock', label: 'Tồn kho', icon: 'fa-solid fa-boxes-stacked' },
       { id: 'analytics', label: 'Báo Cáo Thống Kê', icon: 'fa-solid fa-chart-pie' },
       { id: 'receipts', label: 'Biên bản in', icon: 'fa-solid fa-print' },
+      { id: 'export', label: 'Xuất / Đồng bộ Sheets', icon: 'fa-solid fa-file-export' },
       { id: 'debug', label: 'Debug', icon: 'fa-solid fa-terminal' }
     ];
     const adminTabs = [
@@ -874,6 +889,23 @@ createApp({
         });
     });
 
+    const categoryGroupedCatalog = computed(() => products.value
+      .map((product) => {
+        const category = categories.value.find((item) => String(item.id) === String(product.category_id));
+        return {
+          category: category?.name || 'Chưa phân nhóm',
+          code: product.code || '',
+          name: product.name || '',
+          unit: product.unit || '',
+          price: num(product.price),
+          status: product.status || 'Active'
+        };
+      })
+      .sort((left, right) =>
+        norm(left.category).localeCompare(norm(right.category)) ||
+        norm(left.code).localeCompare(norm(right.code))
+      ));
+
     const filteredCategories = computed(() => {
       const q = norm(categoryFilter.value);
       return !q ? categories.value : categories.value.filter((category) => norm(category.name).includes(q));
@@ -960,6 +992,7 @@ createApp({
     watch(stockFilter, () => { stockPage.value = 1; });
     watch(currentTab, (newTab) => {
       if (newTab !== 'matrix') closeBatchPopover();
+      if (newTab === 'export') loadGoogleSheetConfigs();
     });
 
     const summarizeByUnit = (items) => {
@@ -1080,6 +1113,8 @@ createApp({
           : '';
       if (activeVendorId.value && nextVendorId && activeVendorId.value !== nextVendorId) {
         clearLocalDatabase();
+        googleSheetConfigs.value = [];
+        resetGoogleSheetForm();
       }
       activeVendorId.value = nextVendorId;
       if (nextVendorId) localStorage.setItem(ACTIVE_VENDOR_STORAGE_KEY, nextVendorId);
@@ -1161,6 +1196,183 @@ createApp({
           window.setTimeout(() => reject(new Error(`Request timeout: ${path}`)), timeoutMs);
         })
       ]);
+    }
+
+    function extractGoogleSheetId(url) {
+      return String(url || '').match(/\/spreadsheets\/d\/([A-Za-z0-9_-]+)/)?.[1] || '';
+    }
+
+    const parseGoogleSheetId = extractGoogleSheetId;
+
+    async function loadGoogleSheetConfigs() {
+      if (isAdmin.value || googleSheetLoading.value) return;
+      googleSheetLoading.value = true;
+      try {
+        const configs = await requestWithTimeout('/api/sync/google-sheets/config');
+        googleSheetConfigs.value = Array.isArray(configs) ? configs : [];
+      } catch (error) {
+        logError('loadGoogleSheetConfigs', error);
+      } finally {
+        googleSheetLoading.value = false;
+      }
+    }
+
+    function resetGoogleSheetForm() {
+      Object.assign(googleSheetForm, {
+        school_id: '',
+        sheet_name: '',
+        sheet_url: '',
+        sync_direction: 'two_way',
+        auto_sync_enabled: true
+      });
+      googleSheetEditingId.value = '';
+    }
+
+    function editGoogleSheetConfig(config) {
+      Object.assign(googleSheetForm, {
+        school_id: config.school_id || '',
+        sheet_name: config.sheet_name || '',
+        sheet_url: config.sheet_url || '',
+        sync_direction: config.sync_direction || 'two_way',
+        auto_sync_enabled: config.auto_sync_enabled !== false
+      });
+      googleSheetEditingId.value = config.id;
+    }
+
+    async function saveGoogleSheetConfig() {
+      const sheetId = extractGoogleSheetId(googleSheetForm.sheet_url);
+      if (!googleSheetForm.sheet_name.trim() || !sheetId) {
+        addToast('Vui lòng nhập tên và URL Google Sheets hợp lệ.', 'warn');
+        return;
+      }
+      googleSheetSaving.value = true;
+      try {
+        const method = googleSheetEditingId.value ? 'PUT' : 'POST';
+        const path = googleSheetEditingId.value
+          ? `/api/sync/google-sheets/config/${encodeURIComponent(googleSheetEditingId.value)}`
+          : '/api/sync/google-sheets/config';
+        const saved = await apiJson(path, {
+          method,
+          body: JSON.stringify({
+            ...googleSheetForm,
+            school_id: googleSheetForm.school_id || null,
+            sheet_id: sheetId
+          })
+        });
+        if (googleSheetEditingId.value) {
+          googleSheetConfigs.value = googleSheetConfigs.value.map((config) => config.id === saved.id ? saved : config);
+        } else {
+          googleSheetConfigs.value = [...googleSheetConfigs.value, saved];
+        }
+        resetGoogleSheetForm();
+        addToast('Đã lưu cấu hình Google Sheets.', 'success');
+      } catch (error) {
+        addToast(error.message || 'Không thể lưu cấu hình Google Sheets.', 'warn');
+        logError('saveGoogleSheetConfig', error);
+      } finally {
+        googleSheetSaving.value = false;
+      }
+    }
+
+    async function deleteGoogleSheetConfig(config) {
+      if (!window.confirm(`Xóa cấu hình "${config.sheet_name}"?`)) return;
+      try {
+        await apiJson(`/api/sync/google-sheets/config/${encodeURIComponent(config.id)}`, { method: 'DELETE' });
+        googleSheetConfigs.value = googleSheetConfigs.value.filter((item) => item.id !== config.id);
+        addToast('Đã xóa cấu hình Google Sheets.', 'success');
+      } catch (error) {
+        addToast(error.message || 'Không thể xóa cấu hình.', 'warn');
+        logError('deleteGoogleSheetConfig', error);
+      }
+    }
+
+    async function testGoogleSheetConfig(config) {
+      googleSheetBusyId.value = config.id;
+      try {
+        const result = await apiJson(`/api/sync/google-sheets/test?config_id=${encodeURIComponent(config.id)}`, { method: 'POST' });
+        addToast(result.message || 'Đã kiểm tra kết nối.', result.status === 'connected' ? 'success' : 'info');
+      } catch (error) {
+        addToast(error.message || 'Kiểm tra kết nối thất bại.', 'warn');
+        logError('testGoogleSheetConfig', error);
+      } finally {
+        googleSheetBusyId.value = '';
+      }
+    }
+
+    async function triggerGoogleSheetSync(config) {
+      googleSheetBusyId.value = config.id;
+      try {
+        const result = await apiJson('/api/sync/google-sheets/manual-trigger', {
+          method: 'POST',
+          body: JSON.stringify({ config_id: config.id, delivery_date: deliveryDate.value })
+        });
+        addToast(result.message || 'Đã tạo gói đồng bộ.', 'success');
+      } catch (error) {
+        addToast(error.message || 'Đồng bộ Google Sheets thất bại.', 'warn');
+        logError('triggerGoogleSheetSync', error);
+      } finally {
+        googleSheetBusyId.value = '';
+      }
+    }
+
+    function buildGoogleAppsScript(config) {
+      const backendBase = API_BASE || window.location.origin;
+      const payloadUrl = `${backendBase}/api/sync/google-sheets/payload/${config.id}?token=${encodeURIComponent(config.webhook_token)}`;
+      const webhookUrl = `${backendBase}/api/sync/google-sheets/webhook`;
+      return `const VNFS_API_BASE = ${JSON.stringify(backendBase)};
+const CONFIG_ID = ${JSON.stringify(config.id)};
+const SYNC_TOKEN = ${JSON.stringify(config.webhook_token)};
+const PAYLOAD_URL = ${JSON.stringify(payloadUrl)};
+const WEBHOOK_URL = ${JSON.stringify(webhookUrl)};
+
+function onEdit(e) {
+  const sheet = e.range.getSheet();
+  const values = sheet.getDataRange().getValues();
+  if (values.length < 2) return;
+  const headers = values.shift().map(String);
+  const indexOf = (name) => headers.findIndex((header) => header.toLowerCase().includes(name));
+  const records = values.filter((row) => row.some((cell) => String(cell).trim())).map((row) => ({
+    category: row[indexOf('category')] || row[indexOf('nhóm')] || '',
+    code: row[indexOf('code')] || row[indexOf('mã')] || '',
+    name: row[indexOf('name')] || row[indexOf('tên')] || '',
+    unit: row[indexOf('unit')] || row[indexOf('đơn vị')] || '',
+    price: row[indexOf('price')] || row[indexOf('giá')] || 0
+  }));
+  UrlFetchApp.fetch(WEBHOOK_URL, {
+    method: 'post',
+    contentType: 'application/json',
+    payload: JSON.stringify({ config_id: CONFIG_ID, token: SYNC_TOKEN, entity: 'catalog', records })
+  });
+}
+
+function syncFromPortal() {
+  const response = UrlFetchApp.fetch(PAYLOAD_URL, { muteHttpExceptions: true });
+  const data = JSON.parse(response.getContentText());
+  const rows = [['Category', 'Code', 'Name', 'Unit', 'Price', 'Status']]
+    .concat((data.catalog || []).map((item) => [
+      item.category, item.code, item.name, item.unit, item.price, item.status
+    ]));
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getActiveSheet();
+  sheet.clearContents();
+  sheet.getRange(1, 1, rows.length, rows[0].length).setValues(rows);
+}
+
+// Install an hourly trigger for syncFromPortal and an installable onEdit trigger.
+`;
+    }
+
+    function openGoogleScriptModal(config) {
+      googleScriptText.value = buildGoogleAppsScript(config);
+      showGoogleScriptModal.value = true;
+    }
+
+    async function copyGoogleScript() {
+      try {
+        await navigator.clipboard.writeText(googleScriptText.value);
+        addToast('Đã sao chép Apps Script.', 'success');
+      } catch (error) {
+        logError('copyGoogleScript', error);
+      }
     }
 
     async function loginWithCredentials() {
@@ -1504,6 +1716,9 @@ createApp({
       authToken.value = '';
       currentUser.value = null;
       users.value = [];
+      googleSheetConfigs.value = [];
+      resetGoogleSheetForm();
+      showGoogleScriptModal.value = false;
       mustChangePassword.value = false;
       showPasswordOnboarding.value = false;
       localStorage.removeItem('auth_token');
@@ -2851,6 +3066,54 @@ createApp({
       URL.revokeObjectURL(link.href);
     }
 
+    function exportCategoryGroupedCatalog() {
+      if (!window.XLSX) {
+        addToast('Thư viện Excel chưa sẵn sàng.', 'warn');
+        return;
+      }
+      const rows = categoryGroupedCatalog.value.map((item) => ({
+        'Category (Nhóm)': item.category,
+        'Mã viết tắt (Shortcut)': item.code,
+        'Tên sản phẩm': item.name,
+        'Đơn vị tính (ĐVT)': item.unit,
+        'Đơn giá (VND)': item.price,
+        'Trạng thái': item.status
+      }));
+      const worksheet = window.XLSX.utils.json_to_sheet(rows);
+      worksheet['!cols'] = [
+        { wch: 24 },
+        { wch: 18 },
+        { wch: 32 },
+        { wch: 16 },
+        { wch: 16 },
+        { wch: 14 }
+      ];
+      const workbook = window.XLSX.utils.book_new();
+      window.XLSX.utils.book_append_sheet(workbook, worksheet, 'Danh mục');
+      window.XLSX.writeFile(workbook, `vnfs-catalog-${deliveryDate.value}.xlsx`);
+    }
+
+    async function copyCategoryGroupedCatalog() {
+      const headers = ['Category (Nhóm)', 'Mã viết tắt (Shortcut)', 'Tên sản phẩm', 'Đơn vị tính (ĐVT)', 'Đơn giá (VND)', 'Trạng thái'];
+      const text = [
+        headers,
+        ...categoryGroupedCatalog.value.map((item) => [
+          item.category,
+          item.code,
+          item.name,
+          item.unit,
+          Math.round(item.price),
+          item.status
+        ])
+      ].map((row) => row.join('\t')).join('\n');
+      try {
+        await navigator.clipboard.writeText(text);
+        addToast('Đã sao chép danh mục dạng bảng vào clipboard.', 'success');
+      } catch (error) {
+        logError('copyCategoryGroupedCatalog', error);
+      }
+    }
+
     function getSlipPriceToggle(slipId) {
       return slipPriceVisibility[slipId] !== false;
     }
@@ -3054,6 +3317,29 @@ createApp({
       users,
       pendingPinUsers,
       copyTempPin,
+      googleSheetConfigs,
+      googleSheetForm,
+      googleSheetEditingId,
+      googleSheetLoading,
+      googleSheetSaving,
+      googleSheetBusyId,
+      googleSheetActionId: googleSheetBusyId,
+      showGoogleScriptModal,
+      googleSheetScriptModal: showGoogleScriptModal,
+      googleScriptText,
+      googleSheetScript: googleScriptText,
+      categoryGroupedCatalog,
+      extractGoogleSheetId,
+      parseGoogleSheetId,
+      loadGoogleSheetConfigs,
+      resetGoogleSheetForm,
+      editGoogleSheetConfig,
+      saveGoogleSheetConfig,
+      deleteGoogleSheetConfig,
+      testGoogleSheetConfig,
+      triggerGoogleSheetSync,
+      openGoogleScriptModal,
+      copyGoogleScript,
       vendors,
       selectedVendorId,
       vendorForm,
@@ -3194,6 +3480,8 @@ createApp({
       saveAvailableStock,
       adjustStock,
       exportCSV,
+      exportCategoryGroupedCatalog,
+      copyCategoryGroupedCatalog,
       copyDebugLogs,
       scheduleSync,
       syncNow,
